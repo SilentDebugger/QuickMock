@@ -1,0 +1,28 @@
+{
+  "name": "quickmock",
+  "version": "1.0.0",
+  "description": "Zero-config mock API server for frontend development",
+  "type": "module",
+  "bin": {
+    "quickmock": "./bin/quickmock.js"
+  },
+  "main": "./src/server.js",
+  "scripts": {
+    "start": "node bin/quickmock.js"
+  },
+  "keywords": [
+    "mock",
+    "api",
+    "server",
+    "frontend",
+    "development",
+    "fake-data"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1"
+  }
+}

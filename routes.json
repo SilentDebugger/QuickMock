@@ -1,0 +1,110 @@
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/users",
+      "status": 200,
+      "response": [
+        {
+          "id": 1,
+          "name": "{{faker.name}}",
+          "email": "{{faker.email}}",
+          "role": "admin"
+        },
+        {
+          "id": 2,
+          "name": "{{faker.name}}",
+          "email": "{{faker.email}}",
+          "role": "user"
+        },
+        {
+          "id": 3,
+          "name": "{{faker.name}}",
+          "email": "{{faker.email}}",
+          "role": "user"
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/users/:id",
+      "status": 200,
+      "response": {
+        "id": "{{params.id}}",
+        "name": "{{faker.name}}",
+        "email": "{{faker.email}}",
+        "phone": "{{faker.phone}}",
+        "company": "{{faker.company}}",
+        "avatar": "{{faker.avatar}}",
+        "createdAt": "{{faker.date}}"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/users",
+      "status": 201,
+      "response": {
+        "id": "{{faker.id}}",
+        "name": "{{body.name}}",
+        "email": "{{body.email}}",
+        "message": "User created successfully"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/users/:id",
+      "status": 200,
+      "response": {
+        "id": "{{params.id}}",
+        "message": "User updated successfully"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/users/:id",
+      "status": 204
+    },
+    {
+      "method": "GET",
+      "path": "/api/posts",
+      "status": 200,
+      "delay": 500,
+      "response": [
+        {
+          "id": 1,
+          "title": "{{faker.lorem}}",
+          "body": "{{faker.paragraph}}",
+          "author": "{{faker.name}}",
+          "publishedAt": "{{faker.date}}"
+        },
+        {
+          "id": 2,
+          "title": "{{faker.lorem}}",
+          "body": "{{faker.paragraph}}",
+          "author": "{{faker.name}}",
+          "publishedAt": "{{faker.date}}"
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/flaky",
+      "status": 200,
+      "error": 0.3,
+      "errorStatus": 503,
+      "response": {
+        "data": "This endpoint fails 30% of the time"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "status": 200,
+      "response": {
+        "status": "ok",
+        "uptime": "{{faker.number}}",
+        "timestamp": "{{faker.date}}"
+      }
+    }
+  ]
+}
