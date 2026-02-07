@@ -45,6 +45,24 @@ export interface RoutesFileConfig {
 
 export type JsonRecord = Record<string, JsonValue>;
 
+// ── Dashboard types ──────────────────────────────
+
+export interface LogEntry {
+  method: string;
+  path: string;
+  status: number;
+  ms: number;
+  timestamp: number;
+}
+
+export interface RuntimeOverride {
+  delay?: number;
+  error?: number;
+  disabled?: boolean;
+}
+
+export type LogListener = (entry: LogEntry) => void;
+
 // ── Server types ──────────────────────────────────
 
 export interface ServerOptions {

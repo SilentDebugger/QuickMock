@@ -9,7 +9,7 @@
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/dashboard dist/dashboard",
     "start": "node bin/quickmock.js",
     "dev": "tsx src/cli.ts"
   },

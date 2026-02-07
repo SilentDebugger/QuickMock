@@ -21,13 +21,15 @@ Every code change MUST follow this protocol:
 ```
 src/cli.ts → src/server.ts → src/template.ts
              ↓               src/store.ts
-             src/types.ts    src/watcher.ts
+             src/types.ts    src/dashboard.ts → src/types.ts
+                             src/watcher.ts      src/store.ts
                              src/types.ts
 ```
 
-- Changing `types.ts` → check ALL modules (`cli`, `server`, `template`, `store`)
+- Changing `types.ts` → check ALL modules (`cli`, `server`, `template`, `store`, `dashboard`)
 - Changing `template.ts`, `store.ts`, or `watcher.ts` → check `server.ts`
-- Changing `server.ts` → check `cli.ts`, `template.ts`, `store.ts`, `watcher.ts`
+- Changing `dashboard.ts` → check `server.ts`
+- Changing `server.ts` → check `cli.ts`, `template.ts`, `store.ts`, `watcher.ts`, `dashboard.ts`
 - Changing `cli.ts` → check `server.ts`
 
 ## Expansion Policy

@@ -5,14 +5,16 @@ Zero-config mock API server for rapid frontend development.
 ## Architecture
 
 ```
-bin/quickmock.js    → CLI shim (imports dist/cli.js)
-src/cli.ts          → CLI entry, argument parsing, initialization
-src/server.ts       → HTTP server, routing, request handling, logging
-src/store.ts        → In-memory stateful data store for resources
-src/template.ts     → Template engine, fake data generators
-src/watcher.ts      → File watching with debounced reload
-src/types.ts        → Shared type definitions
-routes.json         → User-defined route and resource configuration
+bin/quickmock.js      → CLI shim (imports dist/cli.js)
+src/cli.ts            → CLI entry, argument parsing, initialization
+src/server.ts         → HTTP server, routing, request handling, logging
+src/store.ts          → In-memory stateful data store for resources
+src/dashboard.ts      → Dashboard handler: static serving, API, SSE
+src/dashboard/        → Dashboard frontend (HTML, CSS, JS)
+src/template.ts       → Template engine, fake data generators
+src/watcher.ts        → File watching with debounced reload
+src/types.ts          → Shared type definitions
+routes.json           → User-defined route and resource configuration
 ```
 
 ### Module Dependencies
@@ -22,25 +24,27 @@ bin/quickmock.js → dist/cli.js (compiled from src/cli.ts)
 
 src/cli.ts → src/server.ts → src/template.ts
              ↓               src/store.ts
-             src/types.ts    src/watcher.ts
+             src/types.ts    src/dashboard.ts → src/types.ts
+                             src/watcher.ts      src/store.ts
                              src/types.ts
 ```
 
 - `cli` consumes `server` (calls `startServer`) and `types` (for `ServerOptions`)
-- `server` consumes `template` (response processing), `store` (stateful CRUD), `watcher` (hot-reload), and `types`
+- `server` consumes `template` (response processing), `store` (stateful CRUD), `dashboard` (UI handler), `watcher` (hot-reload), and `types`
+- `dashboard` consumes `types` (for `Route`, `RuntimeOverride`, `LogEntry`, etc.) and `store` (for `Store` type)
 - `template` consumes `types` (for `TemplateContext`, `JsonValue`)
 - `store` consumes `types` (for `JsonRecord`, `JsonValue`)
 - `watcher` and `types` are leaf modules with no internal dependencies
 
 ### Build
 
-Source in `src/*.ts` compiles to `dist/` via `tsc`. The `bin/quickmock.js` shim imports from `dist/cli.js`.
+Source in `src/*.ts` compiles to `dist/` via `tsc`. The `bin/quickmock.js` shim imports from `dist/cli.js`. The build script also copies `src/dashboard/` to `dist/dashboard/` for static file serving.
 
 ## Module Contracts
 
 **cli** — Parses CLI arguments, handles `--help` and `--init`, then delegates to `startServer`. All user-facing CLI output lives here.
 
-**server** — Owns the full HTTP lifecycle. Matches custom routes first, then resource routes, then 404. Extracts parameters, parses request data, delegates response processing to `template` (for custom routes) or `store` (for resource CRUD). Handles CORS, colored logging, and graceful shutdown.
+**server** — Owns the full HTTP lifecycle. Delegates `/__dashboard` and `/__api` paths to `dashboard`, then matches custom routes, then resource routes, then 404. Manages runtime overrides (delay, error, disabled) set from the dashboard. Extracts parameters, parses request data, delegates response processing to `template` (for custom routes) or `store` (for resource CRUD). Handles CORS, colored logging, log event emission, and graceful shutdown.
 
 **store** — Pure data module. Manages named in-memory collections of JSON records. Supports seed, list (with filtering and pagination), get, create, update, patch, remove, and reset. No I/O, no HTTP concerns.
 
@@ -48,7 +52,9 @@ Source in `src/*.ts` compiles to `dist/` via `tsc`. The `bin/quickmock.js` shim 
 
 **watcher** — Utility module. Watches a file for changes, debounces rapid events, and recovers from temporary file deletions. No domain logic.
 
-**types** — Shared type definitions. All interfaces and types used across module boundaries live here: `Route`, `RouteConfig`, `ResourceConfig`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`.
+**dashboard** — Serves the web dashboard UI. Handles `/__dashboard` (static files) and `/__api/*` (state query, runtime override patches, SSE log stream). Receives a `DashboardContext` from `server` with live references to routes, resources, store, overrides, and log subscription. No direct HTTP server creation.
+
+**types** — Shared type definitions. All interfaces and types used across module boundaries live here: `Route`, `RouteConfig`, `ResourceConfig`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`, `LogEntry`, `RuntimeOverride`, `LogListener`.
 
 ## Route Schema
 
@@ -88,10 +94,11 @@ Each resource auto-generates: `GET` (list), `GET /:id`, `POST`, `PUT /:id`, `PAT
 ## Request Flow
 
 1. CORS headers (if enabled)
-2. `POST /__reset` → re-seed all store collections
-3. Match custom routes (defined in `routes` array) → template-based response
-4. Match resource routes (derived from `resources` definitions) → store CRUD
-5. 404
+2. `/__dashboard` or `/__api/*` → dashboard handler (static files, API, SSE)
+3. `POST /__reset` → re-seed all store collections
+4. Match custom routes (defined in `routes` array) → check overrides (disabled → 503, delay, error) → template-based response
+5. Match resource routes (derived from `resources` definitions) → check overrides → store CRUD
+6. 404
 
 Custom routes take precedence over resource routes, allowing selective overrides.
 

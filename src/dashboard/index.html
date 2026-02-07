@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>quickmock dashboard</title>
+  <link rel="stylesheet" href="/__dashboard/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="brand-icon">◆</span> quickmock</div>
+    <div class="server-info" id="server-info"></div>
+  </header>
+
+  <main>
+    <aside id="endpoints-panel">
+      <div class="panel-header">
+        <h2>Endpoints</h2>
+      </div>
+      <div id="endpoints-list"></div>
+    </aside>
+
+    <section id="tryit-panel">
+      <div class="panel-header">
+        <h2>Try it</h2>
+      </div>
+      <div class="tryit-form">
+        <div class="tryit-url-row">
+          <select id="tryit-method">
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+          <input type="text" id="tryit-url" placeholder="/api/users" spellcheck="false">
+          <button id="tryit-send">Send</button>
+        </div>
+        <div class="tryit-fields">
+          <label>Headers <span class="hint">(JSON)</span></label>
+          <textarea id="tryit-headers" rows="2" spellcheck="false" placeholder='{"Authorization": "Bearer ..."}'></textarea>
+          <label>Body <span class="hint">(JSON)</span></label>
+          <textarea id="tryit-body" rows="4" spellcheck="false" placeholder='{"name": "John", "email": "john@example.com"}'></textarea>
+        </div>
+      </div>
+      <div id="tryit-response" class="hidden">
+        <div class="response-meta" id="response-meta"></div>
+        <pre id="response-body"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer id="log-panel">
+    <div class="panel-header">
+      <h2>Live Log</h2>
+      <div class="log-controls">
+        <label class="toggle-label"><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+        <button id="log-clear">Clear</button>
+      </div>
+    </div>
+    <div id="log-entries"></div>
+  </footer>
+
+  <script type="module" src="/__dashboard/app.js"></script>
+</body>
+</html>

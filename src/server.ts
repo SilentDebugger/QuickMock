@@ -5,8 +5,10 @@ import chalk from 'chalk';
 import { processTemplate } from './template.js';
 import { watchFile } from './watcher.js';
 import { createStore } from './store.js';
+import { handleDashboardRequest } from './dashboard.js';
+import type { DashboardContext } from './dashboard.js';
 import type { Store } from './store.js';
-import type { Route, RouteConfig, ResourceConfig, RoutesFileConfig, ServerOptions, TemplateContext, JsonValue, JsonRecord } from './types.js';
+import type { Route, RouteConfig, ResourceConfig, RoutesFileConfig, ServerOptions, TemplateContext, JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride } from './types.js';
 
 // ── Color palette ──────────────────────────────────
 
@@ -52,6 +54,24 @@ interface ResourceEntry {
 }
 
 let resources: ResourceEntry[] = [];
+
+// ── Runtime overrides ─────────────────────────────
+
+const routeOverrides    = new Map<number, RuntimeOverride>();
+const resourceOverrides = new Map<string, RuntimeOverride>();
+
+// ── Log event emitter ─────────────────────────────
+
+const logListeners = new Set<LogListener>();
+
+function subscribeLog(listener: LogListener): () => void {
+  logListeners.add(listener);
+  return () => logListeners.delete(listener);
+}
+
+function emitLog(entry: LogEntry): void {
+  for (const listener of logListeners) listener(entry);
+}
 
 // ── Route matching ─────────────────────────────────
 
@@ -227,6 +247,17 @@ async function handleRequest(
     }
   }
 
+  // Dashboard and API
+  if (pathname.startsWith('/__dashboard') || pathname.startsWith('/__api/')) {
+    const dashBody = await parseBody(req);
+    const dashCtx: DashboardContext = {
+      routes, resources, options, store,
+      routeOverrides, resourceOverrides, subscribeLog,
+    };
+    const handled = await handleDashboardRequest(req, res, pathname, method, dashBody, dashCtx);
+    if (handled) return;
+  }
+
   // Reset endpoint
   if (method === 'POST' && pathname === '/__reset') {
     store.reset();
@@ -243,13 +274,25 @@ async function handleRequest(
 
   if (match) {
     const { route, params } = match;
+    const routeIdx = routes.indexOf(route);
+    const override = routeOverrides.get(routeIdx);
 
-    // Delay
-    const delay = route.delay ?? options.delay ?? 0;
+    // Check disabled override
+    if (override?.disabled) {
+      const body = JSON.stringify({ error: 'Service Unavailable', message: 'This endpoint is temporarily disabled via dashboard' });
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(body);
+      logRequest(method, pathname, 503, Date.now() - start);
+      return;
+    }
+
+    // Delay (override takes precedence)
+    const delay = override?.delay ?? route.delay ?? options.delay ?? 0;
     if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
 
-    // Random error simulation
-    if (route.error && Math.random() < route.error) {
+    // Random error simulation (override takes precedence)
+    const errorRate = override?.error ?? route.error ?? 0;
+    if (errorRate > 0 && Math.random() < errorRate) {
       const errStatus = route.errorStatus || 500;
       const body = JSON.stringify({
         error: http.STATUS_CODES[errStatus] || 'Error',
@@ -298,13 +341,24 @@ async function handleRequest(
 
   if (resourceMatch) {
     const { resource } = resourceMatch;
+    const override = resourceOverrides.get(resource.name);
 
-    // Per-resource delay
-    const delay = resource.delay ?? options.delay ?? 0;
+    // Check disabled override
+    if (override?.disabled) {
+      const body = JSON.stringify({ error: 'Service Unavailable', message: 'This resource is temporarily disabled via dashboard' });
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(body);
+      logRequest(method, pathname, 503, Date.now() - start);
+      return;
+    }
+
+    // Per-resource delay (override takes precedence)
+    const delay = override?.delay ?? resource.delay ?? options.delay ?? 0;
     if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
 
-    // Per-resource error injection
-    if (resource.error && Math.random() < resource.error) {
+    // Per-resource error injection (override takes precedence)
+    const errorRate = override?.error ?? resource.error ?? 0;
+    if (errorRate > 0 && Math.random() < errorRate) {
       const errStatus = resource.errorStatus || 500;
       const body = JSON.stringify({
         error: http.STATUS_CODES[errStatus] || 'Error',
@@ -346,6 +400,7 @@ function logRequest(method: string, pathname: string, status: number, ms: number
   const mFn  = c.method[method] ?? c.dim;
   const mStr = mFn(method.padEnd(7));
   console.log(`  ${mStr} ${c.path(pathname)}  ${c.dim('→')}  ${c.status(status)}  ${c.dim('in')} ${c.time(ms + 'ms')}`);
+  emitLog({ method, path: pathname, status, ms, timestamp: Date.now() });
 }
 
 // ── Route loader ───────────────────────────────────
@@ -416,6 +471,7 @@ function printBanner(routesFile: string, options: ServerOptions, routeList: Rout
   console.log(`  ${c.dim('Mock API server running')}`);
   console.log('');
   console.log(`  ${c.dim('URL')}        ${c.success(`http://${options.host}:${options.port}`)}`);
+  console.log(`  ${c.dim('Dashboard')}  ${c.success(`http://${options.host}:${options.port}/__dashboard`)}`);
   console.log(`  ${c.dim('Routes')}     ${c.path(path.resolve(routesFile))}`);
   console.log(`  ${c.dim('CORS')}       ${options.cors ? c.success('enabled') : c.warn('disabled')}`);
   console.log(`  ${c.dim('Watch')}      ${options.watch ? c.success('enabled') : c.dim('disabled')}`);
@@ -521,6 +577,8 @@ export async function startServer(routesFile: string, options: ServerOptions): P
     watchFile(resolved, async () => {
       try {
         const updated = await loadRoutes(resolved);
+        routeOverrides.clear();
+        resourceOverrides.clear();
         const parts = [];
         if (updated.length > 0) parts.push(`${updated.length} routes`);
         if (resources.length > 0) parts.push(`${resources.length} resources`);
