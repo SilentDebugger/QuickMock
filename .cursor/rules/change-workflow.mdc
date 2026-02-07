@@ -1,0 +1,35 @@
+---
+description: Enforces dependency-aware changes across the codebase
+alwaysApply: true
+---
+
+# Change Workflow
+
+Every code change MUST follow this protocol:
+
+1. **Read first** — Understand the file and its role before editing
+2. **Trace imports** — Identify everything the changed file imports
+3. **Trace consumers** — Identify every file that imports from the changed file
+4. **Assess impact** — Determine if the change affects any interface, signature, type, or behavior used by other modules
+5. **Update all affected files** — If dependents are impacted, update them in the same change
+6. **Verify consistency** — Confirm signatures, types, and data flow are consistent across the full chain
+
+**Never change a file in isolation.** A change is incomplete until all dependent modules are verified and updated.
+
+## Dependency Reference
+
+```
+bin/quickmock → src/server → src/template
+                           → src/watcher
+```
+
+- Changing `template` or `watcher` → check `server`
+- Changing `server` → check `bin/quickmock`, `template`, `watcher`
+- Changing `bin/quickmock` → check `server`
+
+## Expansion Policy
+
+- Always explore the existing codebase before adding anything new
+- Only create new files or abstractions when genuinely required
+- Prefer extending existing modules over introducing new ones
+- Remove dead code when refactoring — leave no unused imports or functions
