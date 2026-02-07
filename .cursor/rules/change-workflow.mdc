@@ -12,20 +12,22 @@ Every code change MUST follow this protocol:
 3. **Trace consumers** — Identify every file that imports from the changed file
 4. **Assess impact** — Determine if the change affects any interface, signature, type, or behavior used by other modules
 5. **Update all affected files** — If dependents are impacted, update them in the same change
-6. **Verify consistency** — Confirm signatures, types, and data flow are consistent across the full chain
+6. **Verify consistency** — Confirm types, signatures, and data flow are consistent across the full chain
 
 **Never change a file in isolation.** A change is incomplete until all dependent modules are verified and updated.
 
 ## Dependency Reference
 
 ```
-bin/quickmock → src/server → src/template
-                           → src/watcher
+src/cli.ts → src/server.ts → src/template.ts
+             ↓               src/watcher.ts
+             src/types.ts    src/types.ts
 ```
 
-- Changing `template` or `watcher` → check `server`
-- Changing `server` → check `bin/quickmock`, `template`, `watcher`
-- Changing `bin/quickmock` → check `server`
+- Changing `types.ts` → check ALL modules (`cli`, `server`, `template`)
+- Changing `template.ts` or `watcher.ts` → check `server.ts`
+- Changing `server.ts` → check `cli.ts`, `template.ts`, `watcher.ts`
+- Changing `cli.ts` → check `server.ts`
 
 ## Expansion Policy
 

@@ -5,29 +5,45 @@ Zero-config mock API server for rapid frontend development.
 ## Architecture
 
 ```
-bin/quickmock       → CLI entry, argument parsing, initialization
-src/server          → HTTP server, routing, request handling, logging
-src/template        → Template engine, fake data generators
-src/watcher         → File watching with debounced reload
+bin/quickmock.js    → CLI shim (imports dist/cli.js)
+src/cli.ts          → CLI entry, argument parsing, initialization
+src/server.ts       → HTTP server, routing, request handling, logging
+src/template.ts     → Template engine, fake data generators
+src/watcher.ts      → File watching with debounced reload
+src/types.ts        → Shared type definitions
 routes.json         → User-defined route configuration
 ```
 
 ### Module Dependencies
 
 ```
-bin/quickmock → src/server → src/template
-                           → src/watcher
+bin/quickmock.js → dist/cli.js (compiled from src/cli.ts)
+
+src/cli.ts → src/server.ts → src/template.ts
+             ↓               src/watcher.ts
+             src/types.ts    src/types.ts
 ```
 
-`template` and `watcher` are independent leaf modules with no internal dependencies.
+- `cli` consumes `server` (calls `startServer`) and `types` (for `ServerOptions`)
+- `server` consumes `template` (response processing), `watcher` (hot-reload), and `types`
+- `template` consumes `types` (for `TemplateContext`, `JsonValue`)
+- `watcher` and `types` are leaf modules with no internal dependencies
+
+### Build
+
+Source in `src/*.ts` compiles to `dist/` via `tsc`. The `bin/quickmock.js` shim imports from `dist/cli.js`.
 
 ## Module Contracts
+
+**cli** — Parses CLI arguments, handles `--help` and `--init`, then delegates to `startServer`. All user-facing CLI output lives here.
 
 **server** — Owns the full HTTP lifecycle. Matches routes, extracts parameters, parses request data, delegates response processing to `template`, uses `watcher` for hot-reload. Handles CORS, colored logging, and graceful shutdown.
 
 **template** — Pure processing module. Resolves `{{variable}}` templates against request context (`params`, `query`, `body`, `headers`) and built-in faker generators. Recursively processes nested structures with type coercion. No I/O, no side effects.
 
 **watcher** — Utility module. Watches a file for changes, debounces rapid events, and recovers from temporary file deletions. No domain logic.
+
+**types** — Shared type definitions. All interfaces and types used across module boundaries live here: `Route`, `RouteConfig`, `ServerOptions`, `TemplateContext`, `JsonValue`.
 
 ## Route Schema
 
@@ -59,3 +75,4 @@ bin/quickmock → src/server → src/template
 5. **No dead code** — Remove unused imports, functions, and variables during refactors.
 6. **Consistent patterns** — Follow the conventions already in the codebase. Don't introduce new patterns without justification.
 7. **Clean interfaces** — Exports should have clear, well-defined inputs and outputs. Keep module boundaries tight.
+8. **Type safety** — All shared interfaces live in `types.ts`. Use strict typing. Avoid `any`.

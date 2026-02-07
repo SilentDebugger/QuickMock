@@ -1,12 +1,12 @@
-import fs from 'fs';
+import fs from 'node:fs';
 
 /**
  * Watch a file for changes and invoke `callback` on save.
  * Debounced to avoid double-fires from editors that
  * delete-then-recreate on save.
  */
-export function watchFile(filePath, callback) {
-  let timer = null;
+export function watchFile(filePath: string, callback: () => void): fs.FSWatcher {
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
   const watcher = fs.watch(filePath, (event) => {
     if (event !== 'change') return;

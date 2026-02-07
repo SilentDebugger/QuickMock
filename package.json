@@ -6,9 +6,12 @@
   "bin": {
     "quickmock": "./bin/quickmock.js"
   },
-  "main": "./src/server.js",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
   "scripts": {
-    "start": "node bin/quickmock.js"
+    "build": "tsc",
+    "start": "node bin/quickmock.js",
+    "dev": "tsx src/cli.ts"
   },
   "keywords": [
     "mock",
@@ -24,5 +27,10 @@
   },
   "dependencies": {
     "chalk": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
   }
 }

@@ -1,4 +1,5 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
+import type { TemplateContext, JsonValue } from './types.js';
 
 // ── Fake data pools ────────────────────────────────
 
@@ -48,17 +49,19 @@ const TOPICS = [
 
 // ── Helpers ────────────────────────────────────────
 
-function pick(arr) {
+function pick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function randomInt(min, max) {
+function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 // ── Faker functions ────────────────────────────────
 
-const faker = {
+type FakerFn = () => string | number | boolean;
+
+const faker: Record<string, FakerFn> = {
   id:        () => crypto.randomUUID(),
   name:      () => `${pick(FIRST)} ${pick(LAST)}`,
   firstName: () => pick(FIRST),
@@ -86,20 +89,25 @@ const faker = {
 
   paragraph: () => {
     const sentences = randomInt(3, 6);
-    return Array.from({ length: sentences }, () => faker.lorem()).join(' ');
+    return Array.from({ length: sentences }, () => (faker.lorem as () => string)()).join(' ');
   },
 };
 
 // ── Template engine ────────────────────────────────
 
 /** Resolve a dotted path like "params.id" or "body.user.name". */
-function resolve(obj, dotPath) {
-  return dotPath.split('.').reduce((acc, key) => acc?.[key], obj);
+function resolve(obj: unknown, dotPath: string): unknown {
+  return dotPath.split('.').reduce<unknown>((acc, key) => {
+    if (acc !== null && acc !== undefined && typeof acc === 'object') {
+      return (acc as Record<string, unknown>)[key];
+    }
+    return undefined;
+  }, obj);
 }
 
 /** Replace all {{...}} placeholders in a string. */
-function processString(str, ctx) {
-  return str.replace(/\{\{(.*?)\}\}/g, (_, expr) => {
+function processString(str: string, ctx: TemplateContext): string {
+  return str.replace(/\{\{(.*?)\}\}/g, (_, expr: string) => {
     const key = expr.trim();
 
     // faker.xxx
@@ -125,9 +133,9 @@ function processString(str, ctx) {
 /**
  * Recursively process {{}} templates in any JSON-compatible structure.
  * When a value is a pure template (e.g. "{{faker.number}}"), the
- * result is auto-coerced to the appropriate JS type.
+ * result is auto-coerced to the appropriate type.
  */
-export function processTemplate(data, ctx) {
+export function processTemplate(data: JsonValue, ctx: TemplateContext): JsonValue {
   if (typeof data === 'string') {
     const result = processString(data, ctx);
 
@@ -144,7 +152,7 @@ export function processTemplate(data, ctx) {
   }
 
   if (data !== null && typeof data === 'object') {
-    const out = {};
+    const out: Record<string, JsonValue> = {};
     for (const [key, value] of Object.entries(data)) {
       out[processString(key, ctx)] = processTemplate(value, ctx);
     }
