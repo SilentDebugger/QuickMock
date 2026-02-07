@@ -62,78 +62,33 @@ if (args.includes('--help') || args.includes('-h')) {
 // ── Init: create example routes file ───────────────
 if (args.includes('--init')) {
   const example = {
-    routes: [
-      {
-        method: 'GET',
-        path: '/api/users',
-        status: 200,
-        response: [
-          { id: 1, name: '{{faker.name}}', email: '{{faker.email}}', role: 'admin' },
-          { id: 2, name: '{{faker.name}}', email: '{{faker.email}}', role: 'user' },
-          { id: 3, name: '{{faker.name}}', email: '{{faker.email}}', role: 'user' },
-        ],
-      },
-      {
-        method: 'GET',
-        path: '/api/users/:id',
-        status: 200,
-        response: {
-          id: '{{params.id}}',
+    resources: {
+      users: {
+        basePath: '/api/users',
+        seed: {
+          id: '{{faker.id}}',
           name: '{{faker.name}}',
           email: '{{faker.email}}',
-          phone: '{{faker.phone}}',
-          company: '{{faker.company}}',
+          role: 'user',
           avatar: '{{faker.avatar}}',
           createdAt: '{{faker.date}}',
         },
+        count: 5,
       },
-      {
-        method: 'POST',
-        path: '/api/users',
-        status: 201,
-        response: {
+      posts: {
+        basePath: '/api/posts',
+        seed: {
           id: '{{faker.id}}',
-          name: '{{body.name}}',
-          email: '{{body.email}}',
-          message: 'User created successfully',
+          title: '{{faker.title}}',
+          body: '{{faker.paragraph}}',
+          author: '{{faker.name}}',
+          publishedAt: '{{faker.date}}',
         },
+        count: 3,
+        delay: 200,
       },
-      {
-        method: 'PUT',
-        path: '/api/users/:id',
-        status: 200,
-        response: {
-          id: '{{params.id}}',
-          message: 'User updated successfully',
-        },
-      },
-      {
-        method: 'DELETE',
-        path: '/api/users/:id',
-        status: 204,
-      },
-      {
-        method: 'GET',
-        path: '/api/posts',
-        status: 200,
-        delay: 500,
-        response: [
-          {
-            id: 1,
-            title: '{{faker.lorem}}',
-            body: '{{faker.paragraph}}',
-            author: '{{faker.name}}',
-            publishedAt: '{{faker.date}}',
-          },
-          {
-            id: 2,
-            title: '{{faker.lorem}}',
-            body: '{{faker.paragraph}}',
-            author: '{{faker.name}}',
-            publishedAt: '{{faker.date}}',
-          },
-        ],
-      },
+    },
+    routes: [
       {
         method: 'GET',
         path: '/api/flaky',

@@ -26,9 +26,24 @@ export interface Route {
   errorStatus?: number;
 }
 
+export interface ResourceConfig {
+  basePath: string;
+  seed: JsonValue;
+  count?: number;
+  idField?: string;
+  delay?: number;
+  error?: number;
+  errorStatus?: number;
+}
+
 export interface RoutesFileConfig {
   routes?: RouteConfig[];
+  resources?: Record<string, ResourceConfig>;
 }
+
+// ── Store types ──────────────────────────────────
+
+export type JsonRecord = Record<string, JsonValue>;
 
 // ── Server types ──────────────────────────────────
 

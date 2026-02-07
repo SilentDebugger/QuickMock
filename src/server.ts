@@ -4,7 +4,9 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { processTemplate } from './template.js';
 import { watchFile } from './watcher.js';
-import type { Route, RouteConfig, RoutesFileConfig, ServerOptions, TemplateContext, JsonValue } from './types.js';
+import { createStore } from './store.js';
+import type { Store } from './store.js';
+import type { Route, RouteConfig, ResourceConfig, RoutesFileConfig, ServerOptions, TemplateContext, JsonValue, JsonRecord } from './types.js';
 
 // ── Color palette ──────────────────────────────────
 
@@ -35,6 +37,21 @@ const c = {
 // ── Route state ────────────────────────────────────
 
 let routes: Route[] = [];
+
+// ── Resource state ────────────────────────────────
+
+const store: Store = createStore();
+
+interface ResourceEntry {
+  name: string;
+  basePath: string;
+  idField: string;
+  delay?: number;
+  error?: number;
+  errorStatus?: number;
+}
+
+let resources: ResourceEntry[] = [];
 
 // ── Route matching ─────────────────────────────────
 
@@ -90,6 +107,100 @@ function parseQuery(url: string): Record<string, string> {
   return Object.fromEntries(new URLSearchParams(url.slice(idx)).entries());
 }
 
+// ── Resource matching ─────────────────────────────
+
+interface ResourceMatch {
+  resource: ResourceEntry;
+  id?: string;
+}
+
+function matchResource(method: string, pathname: string): ResourceMatch | null {
+  for (const resource of resources) {
+    const base = resource.basePath.replace(/\/+$/, '');
+    const segs = pathname.replace(/\/+$/, '').split('/');
+    const baseSegs = base.split('/').filter(Boolean);
+    const pathSegs = segs.filter(Boolean);
+
+    // Exact match: GET/POST on base path (list / create)
+    if (pathSegs.length === baseSegs.length) {
+      const match = baseSegs.every((seg, i) => seg === pathSegs[i]);
+      if (match && (method === 'GET' || method === 'POST')) {
+        return { resource };
+      }
+    }
+
+    // ID match: GET/PUT/PATCH/DELETE on base path + /:id
+    if (pathSegs.length === baseSegs.length + 1) {
+      const match = baseSegs.every((seg, i) => seg === pathSegs[i]);
+      if (match && ['GET', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        return { resource, id: decodeURIComponent(pathSegs[pathSegs.length - 1]) };
+      }
+    }
+  }
+
+  return null;
+}
+
+// ── Resource CRUD handler ─────────────────────────
+
+function handleResourceCrud(
+  method: string,
+  match: ResourceMatch,
+  body: JsonValue,
+  query: Record<string, string>,
+): { status: number; data: JsonValue; headers?: Record<string, string> } {
+  const { resource, id } = match;
+
+  // GET collection (list)
+  if (method === 'GET' && !id) {
+    const { limit, offset, ...filters } = query;
+    const parsedLimit = limit !== undefined ? parseInt(limit) : undefined;
+    const parsedOffset = offset !== undefined ? parseInt(offset) : undefined;
+    const result = store.list(resource.name, filters, parsedLimit, parsedOffset);
+    const headers: Record<string, string> = { 'X-Total-Count': String(result.total) };
+    return { status: 200, data: result.items as JsonValue, headers };
+  }
+
+  // GET single item
+  if (method === 'GET' && id) {
+    const item = store.get(resource.name, id);
+    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+    return { status: 200, data: item as JsonValue };
+  }
+
+  // POST create
+  if (method === 'POST') {
+    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+    const item = store.create(resource.name, incoming);
+    return { status: 201, data: item as JsonValue };
+  }
+
+  // PUT full replace
+  if (method === 'PUT' && id) {
+    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+    const item = store.update(resource.name, id, incoming);
+    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+    return { status: 200, data: item as JsonValue };
+  }
+
+  // PATCH partial merge
+  if (method === 'PATCH' && id) {
+    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+    const item = store.patch(resource.name, id, incoming);
+    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+    return { status: 200, data: item as JsonValue };
+  }
+
+  // DELETE
+  if (method === 'DELETE' && id) {
+    const removed = store.remove(resource.name, id);
+    if (!removed) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+    return { status: 204, data: null };
+  }
+
+  return { status: 405, data: { error: 'Method Not Allowed' } };
+}
+
 // ── Request handler ────────────────────────────────
 
 async function handleRequest(
@@ -116,65 +227,117 @@ async function handleRequest(
     }
   }
 
-  // Match
+  // Reset endpoint
+  if (method === 'POST' && pathname === '/__reset') {
+    store.reset();
+    const resBody = JSON.stringify({ message: 'All collections re-seeded' });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(resBody);
+    logRequest(method, pathname, 200, Date.now() - start);
+    console.log(`  ${c.success('↻')}  ${c.dim('Store reset — all collections re-seeded')}`);
+    return;
+  }
+
+  // Match custom routes first
   const match = matchRoute(method, pathname);
 
-  if (!match) {
-    const body = JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` });
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(body);
-    logRequest(method, pathname, 404, Date.now() - start);
+  if (match) {
+    const { route, params } = match;
+
+    // Delay
+    const delay = route.delay ?? options.delay ?? 0;
+    if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
+
+    // Random error simulation
+    if (route.error && Math.random() < route.error) {
+      const errStatus = route.errorStatus || 500;
+      const body = JSON.stringify({
+        error: http.STATUS_CODES[errStatus] || 'Error',
+        message: 'Simulated failure (quickmock error injection)',
+      });
+      res.writeHead(errStatus, { 'Content-Type': 'application/json' });
+      res.end(body);
+      logRequest(method, pathname, errStatus, Date.now() - start);
+      return;
+    }
+
+    // Build template context
+    const reqBody = await parseBody(req);
+    const query   = parseQuery(req.url!);
+    const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
+
+    // Pick response (support "responses" array for random variants)
+    let responseData: JsonValue | undefined = route.response;
+    if (route.responses && route.responses.length > 0) {
+      responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
+    }
+
+    // Process templates
+    if (responseData !== undefined && responseData !== null) {
+      responseData = processTemplate(responseData, ctx);
+    }
+
+    // Send
+    const status  = route.status || 200;
+    const headers = { 'Content-Type': 'application/json', ...route.headers };
+
+    res.writeHead(status, headers);
+
+    if (responseData !== undefined && responseData !== null) {
+      res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
+    } else {
+      res.end();
+    }
+
+    logRequest(method, pathname, status, Date.now() - start);
     return;
   }
 
-  const { route, params } = match;
+  // Match resource routes
+  const resourceMatch = matchResource(method, pathname);
 
-  // Delay
-  const delay = route.delay ?? options.delay ?? 0;
-  if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
+  if (resourceMatch) {
+    const { resource } = resourceMatch;
 
-  // Random error simulation
-  if (route.error && Math.random() < route.error) {
-    const errStatus = route.errorStatus || 500;
-    const body = JSON.stringify({
-      error: http.STATUS_CODES[errStatus] || 'Error',
-      message: 'Simulated failure (quickmock error injection)',
-    });
-    res.writeHead(errStatus, { 'Content-Type': 'application/json' });
-    res.end(body);
-    logRequest(method, pathname, errStatus, Date.now() - start);
+    // Per-resource delay
+    const delay = resource.delay ?? options.delay ?? 0;
+    if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
+
+    // Per-resource error injection
+    if (resource.error && Math.random() < resource.error) {
+      const errStatus = resource.errorStatus || 500;
+      const body = JSON.stringify({
+        error: http.STATUS_CODES[errStatus] || 'Error',
+        message: 'Simulated failure (quickmock error injection)',
+      });
+      res.writeHead(errStatus, { 'Content-Type': 'application/json' });
+      res.end(body);
+      logRequest(method, pathname, errStatus, Date.now() - start);
+      return;
+    }
+
+    const reqBody = await parseBody(req);
+    const query   = parseQuery(req.url!);
+    const result  = handleResourceCrud(method, resourceMatch, reqBody, query);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(result.headers ?? {}) };
+    res.writeHead(result.status, headers);
+
+    if (result.data !== null && result.data !== undefined) {
+      res.end(JSON.stringify(result.data, null, 2));
+    } else {
+      res.end();
+    }
+
+    logRequest(method, pathname, result.status, Date.now() - start);
     return;
   }
 
-  // Build template context
-  const reqBody = await parseBody(req);
-  const query   = parseQuery(req.url!);
-  const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
-
-  // Pick response (support "responses" array for random variants)
-  let responseData: JsonValue | undefined = route.response;
-  if (route.responses && route.responses.length > 0) {
-    responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
-  }
-
-  // Process templates
-  if (responseData !== undefined && responseData !== null) {
-    responseData = processTemplate(responseData, ctx);
-  }
-
-  // Send
-  const status  = route.status || 200;
-  const headers = { 'Content-Type': 'application/json', ...route.headers };
-
-  res.writeHead(status, headers);
-
-  if (responseData !== undefined && responseData !== null) {
-    res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
-  } else {
-    res.end();
-  }
-
-  logRequest(method, pathname, status, Date.now() - start);
+  // 404
+  const body = JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` });
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(body);
+  logRequest(method, pathname, 404, Date.now() - start);
 }
 
 // ── Logging ────────────────────────────────────────
@@ -186,6 +349,14 @@ function logRequest(method: string, pathname: string, status: number, ms: number
 }
 
 // ── Route loader ───────────────────────────────────
+
+/** Empty template context used for seed generation (no request data). */
+const EMPTY_CTX: TemplateContext = {
+  params: {},
+  body: null,
+  query: {},
+  headers: {},
+};
 
 async function loadRoutes(filePath: string): Promise<Route[]> {
   const content = await fs.readFile(filePath, 'utf-8');
@@ -203,6 +374,34 @@ async function loadRoutes(filePath: string): Promise<Route[]> {
     error:       r.error,
     errorStatus: r.errorStatus,
   }));
+
+  // Parse and seed resources
+  const resourceDefs = !Array.isArray(config) ? (config.resources ?? {}) : {};
+  resources = [];
+
+  for (const [name, cfg] of Object.entries(resourceDefs)) {
+    const idField = cfg.idField ?? 'id';
+    const count   = cfg.count ?? 5;
+
+    // Generate seed items by processing the template N times
+    const seedItems: JsonRecord[] = [];
+    for (let i = 0; i < count; i++) {
+      const processed = processTemplate(cfg.seed, EMPTY_CTX);
+      if (processed && typeof processed === 'object' && !Array.isArray(processed)) {
+        seedItems.push(processed as JsonRecord);
+      }
+    }
+
+    store.seed(name, idField, seedItems);
+    resources.push({
+      name,
+      basePath: cfg.basePath,
+      idField,
+      delay: cfg.delay,
+      error: cfg.error,
+      errorStatus: cfg.errorStatus,
+    });
+  }
 
   return routes;
 }
@@ -225,24 +424,48 @@ function printBanner(routesFile: string, options: ServerOptions, routeList: Rout
   }
   console.log('');
 
-  console.log(`  ${c.dim('Registered routes:')}`);
-  console.log(`  ${c.dim('─'.repeat(W))}`);
+  // Custom routes
+  if (routeList.length > 0) {
+    console.log(`  ${c.dim('Registered routes:')}`);
+    console.log(`  ${c.dim('─'.repeat(W))}`);
 
-  for (const route of routeList) {
-    const mFn  = c.method[route.method] ?? c.dim;
-    const mStr = mFn(route.method.padEnd(8));
-    const sStr = c.status(route.status);
-    const extras: string[] = [];
-    if (route.delay)              extras.push(c.time(`${route.delay}ms`));
-    if (route.error)              extras.push(c.warn(`${(route.error * 100).toFixed(0)}% fail`));
-    if (route.responses?.length)  extras.push(c.dim(`${route.responses.length} variants`));
-    const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
+    for (const route of routeList) {
+      const mFn  = c.method[route.method] ?? c.dim;
+      const mStr = mFn(route.method.padEnd(8));
+      const sStr = c.status(route.status);
+      const extras: string[] = [];
+      if (route.delay)              extras.push(c.time(`${route.delay}ms`));
+      if (route.error)              extras.push(c.warn(`${(route.error * 100).toFixed(0)}% fail`));
+      if (route.responses?.length)  extras.push(c.dim(`${route.responses.length} variants`));
+      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
 
-    console.log(`  ${mStr}${c.path(route.path.padEnd(25))} ${c.dim('→')} ${sStr}${extStr}`);
+      console.log(`  ${mStr}${c.path(route.path.padEnd(25))} ${c.dim('→')} ${sStr}${extStr}`);
+    }
+
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    console.log('');
   }
 
-  console.log(`  ${c.dim('─'.repeat(W))}`);
-  console.log('');
+  // Resources
+  if (resources.length > 0) {
+    console.log(`  ${c.dim('Resources (stateful):')}`);
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+
+    for (const res of resources) {
+      const result = store.list(res.name);
+      const extras: string[] = [];
+      if (res.delay) extras.push(c.time(`${res.delay}ms`));
+      if (res.error) extras.push(c.warn(`${(res.error * 100).toFixed(0)}% fail`));
+      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
+
+      console.log(`  ${c.success(res.name.padEnd(10))}${c.path(res.basePath.padEnd(25))} ${c.dim(`${result.total} items`)}${extStr}`);
+    }
+
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    console.log(`  ${c.dim('POST /__reset to re-seed all collections')}`);
+    console.log('');
+  }
+
   console.log(`  ${c.dim('Waiting for requests...')}  ${c.dim('(Ctrl+C to stop)')}`);
   console.log('');
 }
@@ -261,9 +484,11 @@ export async function startServer(routesFile: string, options: ServerOptions): P
     );
   }
 
-  // Load routes
+  // Load routes and resources
   const routeList = await loadRoutes(resolved);
-  if (routeList.length === 0) throw new Error('No routes defined in the routes file');
+  if (routeList.length === 0 && resources.length === 0) {
+    throw new Error('No routes or resources defined in the routes file');
+  }
 
   // Create server
   const server = http.createServer((req, res) => {
@@ -296,7 +521,10 @@ export async function startServer(routesFile: string, options: ServerOptions): P
     watchFile(resolved, async () => {
       try {
         const updated = await loadRoutes(resolved);
-        console.log(`  ${c.success('↻')}  ${c.dim('Routes reloaded')} ${c.dim(`(${updated.length} routes)`)}`);
+        const parts = [];
+        if (updated.length > 0) parts.push(`${updated.length} routes`);
+        if (resources.length > 0) parts.push(`${resources.length} resources`);
+        console.log(`  ${c.success('↻')}  ${c.dim('Reloaded')} ${c.dim(`(${parts.join(', ')})`)}`);
       } catch (err) {
         console.log(`  ${c.error('✗')}  ${c.dim('Reload failed:')} ${(err as Error).message}`);
       }
