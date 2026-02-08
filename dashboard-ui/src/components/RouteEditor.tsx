@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Plus, Trash2, Save } from 'lucide-react';
+import { Plus, Trash2, Save, ArrowUpRight } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { routes } from '../lib/api';
+import { routes, overrides } from '../lib/api';
 import { cn, METHOD_BG } from '../lib/utils';
 import type { RouteConfig } from '../lib/types';
 
 interface Props {
   serverId: string;
   routeList: RouteConfig[];
+  proxyTarget?: string;
+  running?: boolean;
 }
 
-export default function RouteEditor({ serverId, routeList }: Props) {
+export default function RouteEditor({ serverId, routeList, proxyTarget, running }: Props) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [form, setForm] = useState<Partial<RouteConfig>>({});
@@ -27,6 +29,19 @@ export default function RouteEditor({ serverId, routeList }: Props) {
     mutationFn: (idx: number) => routes.delete(serverId, idx),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', serverId] }),
   });
+
+  // Track passthrough state per route index
+  const [passthroughs, setPassthroughs] = useState<Record<number, boolean>>({});
+
+  const togglePassthrough = async (idx: number) => {
+    const next = !passthroughs[idx];
+    setPassthroughs(prev => ({ ...prev, [idx]: next }));
+    try {
+      await overrides.patchRoute(serverId, idx, { passthrough: next });
+    } catch { /* revert on error */
+      setPassthroughs(prev => ({ ...prev, [idx]: !next }));
+    }
+  };
 
   const startEdit = (idx: number) => {
     setEditing(idx);
@@ -71,7 +86,22 @@ export default function RouteEditor({ serverId, routeList }: Props) {
                 {route.delay && <span className="text-xs text-cyan-400">{route.delay}ms</span>}
                 {route.error && <span className="text-xs text-amber-400">{Math.round(route.error * 100)}% fail</span>}
               </div>
-              <div className="flex gap-1">
+              <div className="flex items-center gap-1">
+                {proxyTarget && running && (
+                  <button
+                    onClick={() => togglePassthrough(idx)}
+                    title={passthroughs[idx] ? 'Proxying to real API — click to mock' : 'Click to proxy to real API'}
+                    className={cn(
+                      'flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded transition-colors',
+                      passthroughs[idx]
+                        ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
+                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800',
+                    )}
+                  >
+                    <ArrowUpRight className="w-3 h-3" />
+                    {passthroughs[idx] ? 'PROXY' : 'Proxy'}
+                  </button>
+                )}
                 <button onClick={() => startEdit(idx)} className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded">Edit</button>
                 <button onClick={() => deleteRoute.mutate(idx)} className="p-1 text-zinc-500 hover:text-red-400 rounded">
                   <Trash2 className="w-3.5 h-3.5" />

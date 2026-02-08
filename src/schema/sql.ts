@@ -1,4 +1,4 @@
-import type { ResourceConfig, JsonValue } from '../types.js';
+import type { ResourceConfig, RelationConfig, JsonValue } from '../types.js';
 
 // ── SQL DDL Parser ────────────────────────────────
 
@@ -25,20 +25,32 @@ export function parseSqlDdl(sql: string): { name: string; config: ResourceConfig
     const basePath = `/api/${toSlug(table.name)}`;
     const idCol = table.columns.find(c => c.primaryKey)?.name ?? 'id';
     const seed: Record<string, JsonValue> = {};
+    const relations: Record<string, RelationConfig> = {};
 
     for (const col of table.columns) {
       seed[col.name] = mapColumnToFaker(col);
+
+      // Emit relation from foreign key references
+      if (col.references) {
+        relations[col.name] = {
+          resource: toSlug(col.references.table),
+          field: col.references.column,
+        };
+      }
     }
 
-    return {
-      name: toSlug(table.name),
-      config: {
-        basePath,
-        seed,
-        count: 5,
-        idField: idCol,
-      },
+    const config: ResourceConfig = {
+      basePath,
+      seed,
+      count: 5,
+      idField: idCol,
     };
+
+    if (Object.keys(relations).length > 0) {
+      config.relations = relations;
+    }
+
+    return { name: toSlug(table.name), config };
   });
 }
 

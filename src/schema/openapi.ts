@@ -1,5 +1,5 @@
 import { parse as parseYaml } from 'yaml';
-import type { RouteConfig, ResourceConfig, JsonValue } from '../types.js';
+import type { RouteConfig, ResourceConfig, RelationConfig, JsonValue } from '../types.js';
 
 // ── Types ─────────────────────────────────────────
 
@@ -178,7 +178,45 @@ export function parseOpenApi(input: string | object): ParseResult {
     }
   }
 
+  // Detect relations: scan seed fields for FK-like property names (e.g. userId → users.id)
+  const resourceNames = new Set(resources.map(r => r.name));
+  for (const res of resources) {
+    const seed = res.config.seed;
+    if (!seed || typeof seed !== 'object' || Array.isArray(seed)) continue;
+    const relations: Record<string, RelationConfig> = {};
+    for (const key of Object.keys(seed as Record<string, JsonValue>)) {
+      if (key === res.config.idField) continue; // skip primary key
+      const target = inferRelationTarget(key, resourceNames);
+      if (target) {
+        relations[key] = { resource: target, field: 'id' };
+      }
+    }
+    if (Object.keys(relations).length > 0) {
+      res.config.relations = relations;
+    }
+  }
+
   return { routes, resources };
+}
+
+/** Infer a target resource name from an FK-like property name. */
+function inferRelationTarget(fieldName: string, resourceNames: Set<string>): string | null {
+  // Handle snake_case: author_id → author, user_id → user
+  if (fieldName.endsWith('_id')) {
+    const base = fieldName.slice(0, -3);
+    // Try plural forms
+    if (resourceNames.has(base + 's')) return base + 's';
+    if (resourceNames.has(base + 'es')) return base + 'es';
+    if (resourceNames.has(base)) return base;
+  }
+  // Handle camelCase: authorId → author, userId → user
+  if (fieldName.endsWith('Id') && fieldName.length > 2) {
+    const base = fieldName.slice(0, -2).toLowerCase();
+    if (resourceNames.has(base + 's')) return base + 's';
+    if (resourceNames.has(base + 'es')) return base + 'es';
+    if (resourceNames.has(base)) return base;
+  }
+  return null;
 }
 
 // ── Schema unwrapping ─────────────────────────────

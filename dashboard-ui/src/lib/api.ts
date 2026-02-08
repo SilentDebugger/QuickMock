@@ -59,6 +59,7 @@ export const profiles = {
 export const schema = {
   importSql:     (sql: string) => request<{ resources: Record<string, ResourceConfig> }>('/import/sql', { method: 'POST', body: JSON.stringify({ sql }) }),
   importOpenApi: (spec: string) => request<{ routes: unknown[]; resources: unknown[] }>('/import/openapi', { method: 'POST', body: spec, headers: { 'Content-Type': 'text/plain' } }),
+  importHar:     (har: string, baseUrl?: string) => request<{ routes: unknown[]; resources: unknown[] }>('/import/har', { method: 'POST', body: JSON.stringify({ har, baseUrl }) }),
 };
 
 // ── Runtime overrides ─────────────────────────────

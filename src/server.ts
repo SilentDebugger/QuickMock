@@ -81,19 +81,78 @@ function parseRouteConfigs(raw: RouteConfig[]): Route[] {
   }));
 }
 
+/**
+ * Topological sort for resource seeding order.
+ * Resources that are referenced by others are seeded first.
+ * Falls back gracefully on circular dependencies (breaks cycle).
+ */
+function topoSort(names: string[], deps: Map<string, string[]>): string[] {
+  const visited = new Set<string>();
+  const visiting = new Set<string>(); // cycle detection
+  const sorted: string[] = [];
+
+  function visit(name: string): void {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) return; // circular — break cycle
+    visiting.add(name);
+    for (const dep of deps.get(name) ?? []) {
+      if (names.includes(dep)) visit(dep);
+    }
+    visiting.delete(name);
+    visited.add(name);
+    sorted.push(name);
+  }
+
+  for (const name of names) visit(name);
+  return sorted;
+}
+
 function seedResources(
   resourceDefs: Record<string, ResourceConfig>,
   store: Store,
 ): ResourceEntry[] {
-  const entries: ResourceEntry[] = [];
+  const names = Object.keys(resourceDefs);
+
+  // Build dependency graph from relations
+  const deps = new Map<string, string[]>();
   for (const [name, cfg] of Object.entries(resourceDefs)) {
+    const relDeps: string[] = [];
+    if (cfg.relations) {
+      for (const rel of Object.values(cfg.relations)) {
+        if (rel.resource !== name) relDeps.push(rel.resource);
+      }
+    }
+    deps.set(name, relDeps);
+  }
+
+  // Seed in topological order so referenced collections exist first
+  const ordered = topoSort(names, deps);
+
+  const entries: ResourceEntry[] = [];
+  for (const name of ordered) {
+    const cfg = resourceDefs[name];
     const idField = cfg.idField ?? 'id';
     const count   = cfg.count ?? 5;
     const seedItems: JsonRecord[] = [];
     for (let i = 0; i < count; i++) {
       const processed = processTemplate(cfg.seed, EMPTY_CTX);
       if (processed && typeof processed === 'object' && !Array.isArray(processed)) {
-        seedItems.push(processed as JsonRecord);
+        const item = processed as JsonRecord;
+
+        // Resolve relation fields: pick a real ID from the referenced collection
+        if (cfg.relations) {
+          for (const [field, rel] of Object.entries(cfg.relations)) {
+            const refItems = store.list(rel.resource);
+            if (refItems.total > 0) {
+              const picked = refItems.items[Math.floor(Math.random() * refItems.total)];
+              if (picked && picked[rel.field] !== undefined) {
+                item[field] = picked[rel.field] as JsonValue;
+              }
+            }
+          }
+        }
+
+        seedItems.push(item);
       }
     }
     store.seed(name, idField, seedItems);
@@ -251,11 +310,70 @@ export function createMockServer(config: MockServerConfig): MockServer {
     for (const listener of logListeners) listener(entry);
   }
 
-  function logRequest(method: string, pathname: string, status: number, ms: number): void {
+  function logRequest(method: string, pathname: string, status: number, ms: number, proxied?: boolean): void {
     const mFn  = c.method[method] ?? c.dim;
     const mStr = mFn(method.padEnd(7));
-    console.log(`  ${mStr} ${c.path(pathname)}  ${c.dim('→')}  ${c.status(status)}  ${c.dim('in')} ${c.time(ms + 'ms')}`);
-    emitLog({ method, path: pathname, status, ms, timestamp: Date.now(), serverId: currentConfig.id });
+    const proxyTag = proxied ? c.dim(' [PROXY]') : '';
+    console.log(`  ${mStr} ${c.path(pathname)}  ${c.dim('→')}  ${c.status(status)}  ${c.dim('in')} ${c.time(ms + 'ms')}${proxyTag}`);
+    emitLog({ method, path: pathname, status, ms, timestamp: Date.now(), serverId: currentConfig.id, proxied });
+  }
+
+  // ── Proxy helper ──────────────────────────────
+
+  async function proxyRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    method: string,
+    pathname: string,
+    start: number,
+  ): Promise<void> {
+    const proxyTarget = currentConfig.proxyTarget!;
+    try {
+      const targetUrl = proxyTarget.replace(/\/+$/, '') + pathname;
+      const reqBody = method !== 'GET' && method !== 'HEAD' ? await parseBody(req) : undefined;
+
+      const proxyRes = await fetch(targetUrl, {
+        method,
+        headers: {
+          ...Object.fromEntries(
+            Object.entries(req.headers)
+              .filter(([k]) => !['host', 'connection'].includes(k))
+              .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v ?? '']),
+          ),
+        },
+        body: reqBody !== undefined && reqBody !== null ? JSON.stringify(reqBody) : undefined,
+      });
+
+      const proxyBody = await proxyRes.text();
+      const proxyStatus = proxyRes.status;
+
+      // Collect response headers
+      const respHeaders: Record<string, string> = {};
+      proxyRes.headers.forEach((val, key) => { respHeaders[key] = val; });
+
+      // Record the response for later promotion
+      onProxyResponse?.({
+        method,
+        path: pathname,
+        status: proxyStatus,
+        responseHeaders: respHeaders,
+        body: proxyBody,
+        timestamp: Date.now(),
+      });
+
+      // Pipe response back to client
+      const outHeaders: Record<string, string> = { ...respHeaders };
+      delete outHeaders['transfer-encoding'];
+      delete outHeaders['content-encoding'];
+      delete outHeaders['content-length'];
+      res.writeHead(proxyStatus, outHeaders);
+      res.end(proxyBody);
+      logRequest(method, pathname, proxyStatus, Date.now() - start, true);
+    } catch (err) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad Gateway', message: `Proxy failed: ${(err as Error).message}` }));
+      logRequest(method, pathname, 502, Date.now() - start, true);
+    }
   }
 
   // ── Request handler ───────────────────────────
@@ -300,6 +418,12 @@ export function createMockServer(config: MockServerConfig): MockServer {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(body);
         logRequest(method, pathname, 503, Date.now() - start);
+        return;
+      }
+
+      // Passthrough: forward to proxy target instead of mocking
+      if (override?.passthrough && currentConfig.proxyTarget) {
+        await proxyRequest(req, res, method, pathname, start);
         return;
       }
 
@@ -353,6 +477,12 @@ export function createMockServer(config: MockServerConfig): MockServer {
         return;
       }
 
+      // Passthrough: forward to proxy target instead of mocking
+      if (override?.passthrough && currentConfig.proxyTarget) {
+        await proxyRequest(req, res, method, pathname, start);
+        return;
+      }
+
       const delay = override?.delay ?? resource.delay ?? currentConfig.delay ?? 0;
       if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
 
@@ -381,54 +511,8 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
     // Proxy: forward unmatched requests to real API if proxyTarget is set
     if (currentConfig.proxyTarget) {
-      try {
-        const targetUrl = currentConfig.proxyTarget.replace(/\/+$/, '') + pathname;
-        const reqBody = method !== 'GET' && method !== 'HEAD' ? await parseBody(req) : undefined;
-
-        const proxyRes = await fetch(targetUrl, {
-          method,
-          headers: {
-            ...Object.fromEntries(
-              Object.entries(req.headers)
-                .filter(([k]) => !['host', 'connection'].includes(k))
-                .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v ?? '']),
-            ),
-          },
-          body: reqBody !== undefined && reqBody !== null ? JSON.stringify(reqBody) : undefined,
-        });
-
-        const proxyBody = await proxyRes.text();
-        const proxyStatus = proxyRes.status;
-
-        // Collect response headers
-        const respHeaders: Record<string, string> = {};
-        proxyRes.headers.forEach((val, key) => { respHeaders[key] = val; });
-
-        // Record the response for later promotion
-        onProxyResponse?.({
-          method,
-          path: pathname,
-          status: proxyStatus,
-          responseHeaders: respHeaders,
-          body: proxyBody,
-          timestamp: Date.now(),
-        });
-
-        // Pipe response back to client
-        const outHeaders: Record<string, string> = { ...respHeaders };
-        delete outHeaders['transfer-encoding'];
-        delete outHeaders['content-encoding'];
-        delete outHeaders['content-length'];
-        res.writeHead(proxyStatus, outHeaders);
-        res.end(proxyBody);
-        logRequest(method, pathname, proxyStatus, Date.now() - start);
-        return;
-      } catch (err) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Bad Gateway', message: `Proxy failed: ${(err as Error).message}` }));
-        logRequest(method, pathname, 502, Date.now() - start);
-        return;
-      }
+      await proxyRequest(req, res, method, pathname, start);
+      return;
     }
 
     // 404

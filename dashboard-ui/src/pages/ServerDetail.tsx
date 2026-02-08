@@ -80,8 +80,8 @@ export default function ServerDetail() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'Routes' && <RouteEditor serverId={id!} routeList={config.routes ?? []} />}
-        {tab === 'Resources' && <ResourceEditor serverId={id!} resourceMap={config.resources ?? {}} />}
+        {tab === 'Routes' && <RouteEditor serverId={id!} routeList={config.routes ?? []} proxyTarget={config.proxyTarget} running={running} />}
+        {tab === 'Resources' && <ResourceEditor serverId={id!} resourceMap={config.resources ?? {}} proxyTarget={config.proxyTarget} running={running} />}
         {tab === 'Profiles' && <ProfileManager serverId={id!} profileMap={config.profiles ?? {}} activeProfile={config.activeProfile} />}
         {tab === 'Try It' && <TryItPanel defaultMethod="GET" defaultUrl={`${baseUrl}/`} baseUrl="" />}
         {tab === 'Logs' && (running

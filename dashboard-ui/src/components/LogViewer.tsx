@@ -39,12 +39,15 @@ export default function LogViewer({ url, title = 'Live Log' }: Props) {
             Waiting for requests...
           </div>
         ) : entries.map((e, i) => (
-          <div key={i} className="grid grid-cols-[70px_56px_1fr_48px_56px] gap-2 px-3 py-1 hover:bg-zinc-800/50 items-center">
+          <div key={i} className="grid grid-cols-[70px_56px_1fr_48px_56px_44px] gap-2 px-3 py-1 hover:bg-zinc-800/50 items-center">
             <span className="text-zinc-600">{new Date(e.timestamp).toLocaleTimeString()}</span>
             <span className={cn('font-bold', METHOD_COLORS[e.method] ?? 'text-zinc-500')}>{e.method}</span>
             <span className="text-zinc-300 truncate">{e.path}</span>
             <span className={cn('text-right font-semibold', statusColor(e.status))}>{e.status}</span>
             <span className="text-right text-cyan-400">{e.ms}ms</span>
+            <span className="text-right">
+              {e.proxied && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-400">PROXY</span>}
+            </span>
           </div>
         ))}
       </div>

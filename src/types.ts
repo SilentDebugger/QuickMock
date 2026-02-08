@@ -26,6 +26,11 @@ export interface Route {
   errorStatus?: number;
 }
 
+export interface RelationConfig {
+  resource: string;
+  field: string;
+}
+
 export interface ResourceConfig {
   basePath: string;
   seed: JsonValue;
@@ -34,6 +39,7 @@ export interface ResourceConfig {
   delay?: number;
   error?: number;
   errorStatus?: number;
+  relations?: Record<string, RelationConfig>;
 }
 
 export interface ResourceEntry {
@@ -63,12 +69,14 @@ export interface LogEntry {
   ms: number;
   timestamp: number;
   serverId?: string;
+  proxied?: boolean;
 }
 
 export interface RuntimeOverride {
   delay?: number;
   error?: number;
   disabled?: boolean;
+  passthrough?: boolean;
 }
 
 export type LogListener = (entry: LogEntry) => void;

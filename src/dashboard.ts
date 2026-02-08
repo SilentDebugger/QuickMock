@@ -6,6 +6,7 @@ import * as manager from './manager.js';
 import * as project from './project.js';
 import { parseSqlDdl } from './schema/sql.js';
 import { parseOpenApi } from './schema/openapi.js';
+import { parseHar } from './schema/har.js';
 import { generateDocs } from './docs.js';
 import { generateTypes } from './typegen.js';
 import * as recorder from './recorder.js';
@@ -148,6 +149,20 @@ async function handleApi(
       sendJson(res, 200, result);
     } catch (err) {
       sendJson(res, 400, { error: 'Failed to parse OpenAPI spec', message: (err as Error).message });
+    }
+    return;
+  }
+
+  if (method === 'POST' && pathname === '/__api/import/har') {
+    try {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+      const har = incoming.har as string ?? '';
+      const baseUrl = incoming.baseUrl as string | undefined;
+      if (!har) { sendJson(res, 400, { error: 'Missing HAR text in body.har' }); return; }
+      const result = parseHar(har, baseUrl);
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 400, { error: 'Failed to parse HAR file', message: (err as Error).message });
     }
     return;
   }

@@ -45,6 +45,11 @@ export interface RouteConfig {
   errorStatus?: number;
 }
 
+export interface RelationConfig {
+  resource: string;
+  field: string;
+}
+
 export interface ResourceConfig {
   basePath: string;
   seed: unknown;
@@ -53,6 +58,7 @@ export interface ResourceConfig {
   delay?: number;
   error?: number;
   errorStatus?: number;
+  relations?: Record<string, RelationConfig>;
 }
 
 export interface Profile {
@@ -70,6 +76,7 @@ export interface RuntimeOverride {
   delay?: number;
   error?: number;
   disabled?: boolean;
+  passthrough?: boolean;
 }
 
 export interface LogEntry {
@@ -79,6 +86,7 @@ export interface LogEntry {
   ms: number;
   timestamp: number;
   serverId?: string;
+  proxied?: boolean;
 }
 
 export interface ServerDetail {
