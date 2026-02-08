@@ -1,7 +1,7 @@
 {
   "name": "quickmock",
-  "version": "1.0.0",
-  "description": "Zero-config mock API server for frontend development",
+  "version": "2.0.0",
+  "description": "Zero-config mock API server with management UI",
   "type": "module",
   "bin": {
     "quickmock": "./bin/quickmock.js"
@@ -9,9 +9,12 @@
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
   "scripts": {
-    "build": "tsc && cp -r src/dashboard dist/dashboard",
+    "build:ui": "cd dashboard-ui && npm run build",
+    "build:server": "tsc",
+    "build": "npm run build:server && npm run build:ui && cp -r dashboard-ui/dist dist/dashboard",
     "start": "node bin/quickmock.js",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "dev:ui": "cd dashboard-ui && npm run dev"
   },
   "keywords": [
     "mock",
@@ -26,7 +29,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "chalk": "^5.4.1"
+    "chalk": "^5.4.1",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

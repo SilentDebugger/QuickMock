@@ -1,114 +1,151 @@
 # QuickMock
 
-Zero-config mock API server for rapid frontend development.
+Zero-config mock API server with a management UI for rapid frontend development.
 
 ## Architecture
 
 ```
-bin/quickmock.js      → CLI shim (imports dist/cli.js)
-src/cli.ts            → CLI entry, argument parsing, initialization
-src/server.ts         → HTTP server, routing, request handling, logging
-src/store.ts          → In-memory stateful data store for resources
-src/dashboard.ts      → Dashboard handler: static serving, API, SSE
-src/dashboard/        → Dashboard frontend (HTML, CSS, JS)
-src/template.ts       → Template engine, fake data generators
-src/watcher.ts        → File watching with debounced reload
-src/types.ts          → Shared type definitions
-routes.json           → User-defined route and resource configuration
+bin/quickmock.js        → CLI shim (imports dist/cli.js)
+src/cli.ts              → CLI entry: management mode or legacy single-server mode
+src/server.ts           → createMockServer() factory, request handling, logging
+src/store.ts            → In-memory stateful data store for resources
+src/dashboard.ts        → Management server: React SPA serving, full management API
+src/manager.ts          → Multi-instance lifecycle (create, start, stop, delete)
+src/project.ts          → Persistent storage (.quickmock/servers/*.json)
+src/schema/sql.ts       → SQL DDL parser → ResourceConfig[]
+src/schema/openapi.ts   → OpenAPI/Swagger parser → RouteConfig[] + ResourceConfig[]
+src/template.ts         → Template engine, fake data generators
+src/watcher.ts          → File watching with debounced reload
+src/types.ts            → Shared type definitions
+dashboard-ui/           → React + Vite + Tailwind CSS frontend (builds to dist/)
+routes.json             → User-defined route/resource config (legacy mode)
+.quickmock/             → Persistent server configs (management mode)
 ```
 
 ### Module Dependencies
 
 ```
-bin/quickmock.js → dist/cli.js (compiled from src/cli.ts)
+src/cli.ts → src/server.ts (legacy mode: startServer)
+             src/dashboard.ts (management mode: createManagementServer)
+             src/types.ts
 
-src/cli.ts → src/server.ts → src/template.ts
-             ↓               src/store.ts
-             src/types.ts    src/dashboard.ts → src/types.ts
-                             src/watcher.ts      src/store.ts
-                             src/types.ts
+src/server.ts → src/template.ts
+                src/store.ts
+                src/watcher.ts (legacy mode only)
+                src/types.ts
+
+src/dashboard.ts → src/manager.ts → src/server.ts (createMockServer)
+                                     src/project.ts
+                                     src/types.ts
+                   src/project.ts → src/types.ts
+                   src/schema/sql.ts → src/types.ts
+                   src/schema/openapi.ts → src/types.ts
+                   src/types.ts
+
+src/template.ts → src/types.ts
+src/store.ts → src/types.ts
+src/watcher.ts (no internal dependencies)
+src/types.ts (no internal dependencies)
 ```
-
-- `cli` consumes `server` (calls `startServer`) and `types` (for `ServerOptions`)
-- `server` consumes `template` (response processing), `store` (stateful CRUD), `dashboard` (UI handler), `watcher` (hot-reload), and `types`
-- `dashboard` consumes `types` (for `Route`, `RuntimeOverride`, `LogEntry`, etc.) and `store` (for `Store` type)
-- `template` consumes `types` (for `TemplateContext`, `JsonValue`)
-- `store` consumes `types` (for `JsonRecord`, `JsonValue`)
-- `watcher` and `types` are leaf modules with no internal dependencies
 
 ### Build
 
-Source in `src/*.ts` compiles to `dist/` via `tsc`. The `bin/quickmock.js` shim imports from `dist/cli.js`. The build script also copies `src/dashboard/` to `dist/dashboard/` for static file serving.
+Backend: `tsc` compiles `src/*.ts` to `dist/`.
+Frontend: `cd dashboard-ui && npm run build` outputs to `dashboard-ui/dist/`.
+Full build: `npm run build` runs both, then copies frontend output to `dist/dashboard/`.
+Dev: `src/dashboard` is a symlink to `dashboard-ui/dist/` for tsx dev mode.
 
 ## Module Contracts
 
-**cli** — Parses CLI arguments, handles `--help` and `--init`, then delegates to `startServer`. All user-facing CLI output lives here.
+**cli** — Two modes: (1) `quickmock` with no routes file starts management mode via `createManagementServer`; (2) `quickmock routes.json` starts legacy single-server mode via `startServer`. Handles `--help`, `--init`, `--port`, `--host`.
 
-**server** — Owns the full HTTP lifecycle. Delegates `/__dashboard` and `/__api` paths to `dashboard`, then matches custom routes, then resource routes, then 404. Manages runtime overrides (delay, error, disabled) set from the dashboard. Extracts parameters, parses request data, delegates response processing to `template` (for custom routes) or `store` (for resource CRUD). Handles CORS, colored logging, log event emission, and graceful shutdown.
+**server** — Exports `createMockServer(config)` factory that returns a `MockServer` instance with start/stop/reload/getRoutes/getResources/subscribeLog. Each instance has isolated state (routes, resources, store, overrides, log listeners). Also exports `startServer(file, options)` for backwards-compatible legacy mode. No global state.
 
-**store** — Pure data module. Manages named in-memory collections of JSON records. Supports seed, list (with filtering and pagination), get, create, update, patch, remove, and reset. No I/O, no HTTP concerns.
+**dashboard** — Exports `createManagementServer(port, host)` that creates an HTTP server handling: React SPA at `/__dashboard` (with SPA fallback), management API at `/__api/*` (server CRUD, route/resource CRUD, profiles, runtime overrides, schema import, SSE logs). Delegates to `manager` and `project` for state management.
 
-**template** — Pure processing module. Resolves `{{variable}}` templates against request context (`params`, `query`, `body`, `headers`) and built-in faker generators. Recursively processes nested structures with type coercion. No I/O, no side effects.
+**manager** — Server instance lifecycle. Tracks running `MockServer` instances in a Map. Provides `createInstance`, `startInstance`, `stopInstance`, `deleteInstance`, `getInstance`, `listServers`. Forwards per-instance logs to a global log stream.
 
-**watcher** — Utility module. Watches a file for changes, debounces rapid events, and recovers from temporary file deletions. No domain logic.
+**project** — Persistent storage. Reads/writes `MockServerConfig` JSON files in `.quickmock/servers/`. Provides `listServerConfigs`, `getServerConfig`, `saveServerConfig`, `deleteServerConfig`, `createDefaultConfig`.
 
-**dashboard** — Serves the web dashboard UI. Handles `/__dashboard` (static files) and `/__api/*` (state query, runtime override patches, SSE log stream). Receives a `DashboardContext` from `server` with live references to routes, resources, store, overrides, and log subscription. No direct HTTP server creation.
+**schema/sql** — Parses SQL DDL (`CREATE TABLE` statements). Extracts table names, columns, types, primary keys, foreign keys. Maps column names and SQL types to appropriate faker generators. Returns `ResourceConfig[]`.
 
-**types** — Shared type definitions. All interfaces and types used across module boundaries live here: `Route`, `RouteConfig`, `ResourceConfig`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`, `LogEntry`, `RuntimeOverride`, `LogListener`.
+**schema/openapi** — Parses OpenAPI 3.x and Swagger 2.x specs. Extracts paths, methods, response schemas. Detects CRUD resource patterns. Generates `RouteConfig[]` and `ResourceConfig[]` with faker-mapped seed templates.
 
-## Route Schema
+**store** — Pure data module. Manages named in-memory collections of JSON records. Supports seed, list (filtering, pagination), get, create, update, patch, remove, reset. No I/O.
 
-| Field         | Description                              |
-|---------------|------------------------------------------|
-| `method`      | HTTP method or `*` for any               |
-| `path`        | URL path with `:param` segments          |
-| `status`      | Response status code                     |
-| `response`    | Response body (object, array, or null)   |
-| `responses`   | Variant array, randomly selected         |
-| `headers`     | Custom response headers                  |
-| `delay`       | Per-route latency simulation (ms)        |
-| `error`       | Error injection probability (0.0–1.0)    |
-| `errorStatus` | Status code for injected errors          |
+**template** — Pure processing module. Resolves `{{variable}}` templates against request context and built-in faker generators. Recursively processes nested structures with type coercion. No I/O.
 
-## Resource Schema
+**watcher** — Utility. Watches a file for changes, debounces rapid events, recovers from temporary file deletions.
 
-| Field         | Description                              |
-|---------------|------------------------------------------|
-| `basePath`    | URL prefix (e.g. `/api/users`)           |
-| `seed`        | Template object for generating items     |
-| `count`       | Number of seed items (default: 5)        |
-| `idField`     | ID field name (default: `"id"`)          |
-| `delay`       | Per-resource latency simulation (ms)     |
-| `error`       | Error injection probability (0.0–1.0)    |
-| `errorStatus` | Status code for injected errors          |
+**types** — Shared type definitions: `Route`, `RouteConfig`, `ResourceConfig`, `ResourceEntry`, `MockServerConfig`, `Profile`, `RuntimeOverride`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`, `LogEntry`, `LogListener`.
 
-Each resource auto-generates: `GET` (list), `GET /:id`, `POST`, `PUT /:id`, `PATCH /:id`, `DELETE /:id`. List supports `?limit=N&offset=N` pagination and field filtering (e.g. `?role=admin`). `POST /__reset` re-seeds all collections.
+## Management API
 
-## Template Syntax
+All under `/__api/` prefix, JSON responses.
 
-- **Variables:** `{{params.id}}`, `{{query.page}}`, `{{body.name}}`, `{{headers.authorization}}`
-- **Generators:** `{{faker.name}}`, `{{faker.email}}`, `{{faker.id}}`, `{{faker.number}}`, `{{faker.boolean}}`, `{{faker.date}}`, `{{faker.company}}`, `{{faker.url}}`, `{{faker.lorem}}`, etc.
-- Templates are resolved recursively through all nested objects and arrays.
-- String values are coerced to appropriate types (numbers, booleans) when possible.
+| Endpoint | Method | Description |
+|---|---|---|
+| `/__api/servers` | GET | List servers with running status |
+| `/__api/servers` | POST | Create new server config |
+| `/__api/servers/:id` | GET | Get server detail + runtime state |
+| `/__api/servers/:id` | PATCH | Update server config |
+| `/__api/servers/:id` | DELETE | Delete server (stops if running) |
+| `/__api/servers/:id/start` | POST | Start server instance |
+| `/__api/servers/:id/stop` | POST | Stop server instance |
+| `/__api/servers/:id/routes` | GET/POST | List/add routes |
+| `/__api/servers/:id/routes/:idx` | PATCH/DELETE | Update/delete route |
+| `/__api/servers/:id/resources` | GET/POST | List/add resources |
+| `/__api/servers/:id/resources/:name` | PATCH/DELETE | Update/delete resource |
+| `/__api/servers/:id/profiles` | GET/POST | List/create profiles |
+| `/__api/servers/:id/profiles/:name` | PATCH/DELETE | Update/delete profile |
+| `/__api/servers/:id/profiles/:name/activate` | POST | Activate profile |
+| `/__api/servers/:id/overrides/routes/:idx` | PATCH | Set runtime route override |
+| `/__api/servers/:id/overrides/resources/:name` | PATCH | Set runtime resource override |
+| `/__api/servers/:id/log` | GET | SSE stream for server logs |
+| `/__api/log` | GET | SSE stream for all server logs |
+| `/__api/import/sql` | POST | Parse SQL DDL, return resources |
+| `/__api/import/openapi` | POST | Parse OpenAPI, return routes/resources |
 
-## Request Flow
+## Data Model
+
+```typescript
+interface MockServerConfig {
+  id: string; name: string; description?: string;
+  port: number; host: string; cors: boolean; delay: number;
+  routes: RouteConfig[];
+  resources: Record<string, ResourceConfig>;
+  profiles: Record<string, Profile>;
+  activeProfile?: string;
+  createdAt: number; updatedAt: number;
+}
+
+interface Profile {
+  name: string; description?: string;
+  disabledRoutes: number[];
+  disabledResources: string[];
+  overrides: { routes: Record<number, RuntimeOverride>; resources: Record<string, RuntimeOverride> };
+}
+```
+
+## Route & Resource Schemas
+
+Unchanged from v1 — see `routes.json` format and `{{faker.*}}` template syntax.
+
+## Request Flow (per mock server instance)
 
 1. CORS headers (if enabled)
-2. `/__dashboard` or `/__api/*` → dashboard handler (static files, API, SSE)
-3. `POST /__reset` → re-seed all store collections
-4. Match custom routes (defined in `routes` array) → check overrides (disabled → 503, delay, error) → template-based response
-5. Match resource routes (derived from `resources` definitions) → check overrides → store CRUD
-6. 404
-
-Custom routes take precedence over resource routes, allowing selective overrides.
+2. `POST /__reset` → re-seed all store collections
+3. Match custom routes → check overrides (disabled → 503, delay, error) → template response
+4. Match resource routes → check overrides → store CRUD
+5. 404
 
 ## Principles
 
-1. **Understand before changing** — Read and comprehend existing code before editing. Never assume.
-2. **Trace the full dependency chain** — Every change must account for all importing and consuming modules. A change is not complete until all affected dependents are updated.
-3. **Expand only when necessary** — Prefer extending existing modules over adding new ones. Only introduce new files or abstractions when there is a clear, justified need.
-4. **Single responsibility** — Each module owns exactly one concern. Keep it that way.
-5. **No dead code** — Remove unused imports, functions, and variables during refactors.
-6. **Consistent patterns** — Follow the conventions already in the codebase. Don't introduce new patterns without justification.
-7. **Clean interfaces** — Exports should have clear, well-defined inputs and outputs. Keep module boundaries tight.
-8. **Type safety** — All shared interfaces live in `types.ts`. Use strict typing. Avoid `any`.
+1. **Understand before changing** — Read and comprehend existing code before editing
+2. **Trace the full dependency chain** — Every change must account for all importing and consuming modules
+3. **Expand only when necessary** — Prefer extending existing modules over adding new ones
+4. **Single responsibility** — Each module owns exactly one concern
+5. **No dead code** — Remove unused imports, functions, and variables during refactors
+6. **Consistent patterns** — Follow the conventions already in the codebase
+7. **Clean interfaces** — Exports should have clear, well-defined inputs and outputs
+8. **Type safety** — All shared interfaces live in `types.ts`. Use strict typing. Avoid `any`

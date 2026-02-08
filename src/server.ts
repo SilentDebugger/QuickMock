@@ -5,10 +5,12 @@ import chalk from 'chalk';
 import { processTemplate } from './template.js';
 import { watchFile } from './watcher.js';
 import { createStore } from './store.js';
-import { handleDashboardRequest } from './dashboard.js';
-import type { DashboardContext } from './dashboard.js';
 import type { Store } from './store.js';
-import type { Route, RouteConfig, ResourceConfig, RoutesFileConfig, ServerOptions, TemplateContext, JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride } from './types.js';
+import type {
+  Route, RouteConfig, ResourceConfig, ResourceEntry, RoutesFileConfig,
+  MockServerConfig, ServerOptions, TemplateContext,
+  JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride,
+} from './types.js';
 
 // ── Color palette ──────────────────────────────────
 
@@ -36,77 +38,7 @@ const c = {
   },
 };
 
-// ── Route state ────────────────────────────────────
-
-let routes: Route[] = [];
-
-// ── Resource state ────────────────────────────────
-
-const store: Store = createStore();
-
-interface ResourceEntry {
-  name: string;
-  basePath: string;
-  idField: string;
-  delay?: number;
-  error?: number;
-  errorStatus?: number;
-}
-
-let resources: ResourceEntry[] = [];
-
-// ── Runtime overrides ─────────────────────────────
-
-const routeOverrides    = new Map<number, RuntimeOverride>();
-const resourceOverrides = new Map<string, RuntimeOverride>();
-
-// ── Log event emitter ─────────────────────────────
-
-const logListeners = new Set<LogListener>();
-
-function subscribeLog(listener: LogListener): () => void {
-  logListeners.add(listener);
-  return () => logListeners.delete(listener);
-}
-
-function emitLog(entry: LogEntry): void {
-  for (const listener of logListeners) listener(entry);
-}
-
-// ── Route matching ─────────────────────────────────
-
-interface RouteMatch {
-  route: Route;
-  params: Record<string, string>;
-}
-
-function matchRoute(method: string, pathname: string): RouteMatch | null {
-  for (const route of routes) {
-    if (route.method !== method && route.method !== '*') continue;
-
-    const rSegs = route.path.split('/').filter(Boolean);
-    const pSegs = pathname.split('/').filter(Boolean);
-    if (rSegs.length !== pSegs.length) continue;
-
-    const params: Record<string, string> = {};
-    let ok = true;
-
-    for (let i = 0; i < rSegs.length; i++) {
-      if (rSegs[i].startsWith(':')) {
-        params[rSegs[i].slice(1)] = decodeURIComponent(pSegs[i]);
-      } else if (rSegs[i] !== pSegs[i]) {
-        ok = false;
-        break;
-      }
-    }
-
-    if (ok) return { route, params };
-  }
-
-  return null;
-}
-
-// ── Helpers ────────────────────────────────────────
+// ── Shared helpers ────────────────────────────────
 
 function parseBody(req: http.IncomingMessage): Promise<JsonValue> {
   return new Promise((resolve) => {
@@ -127,285 +59,7 @@ function parseQuery(url: string): Record<string, string> {
   return Object.fromEntries(new URLSearchParams(url.slice(idx)).entries());
 }
 
-// ── Resource matching ─────────────────────────────
-
-interface ResourceMatch {
-  resource: ResourceEntry;
-  id?: string;
-}
-
-function matchResource(method: string, pathname: string): ResourceMatch | null {
-  for (const resource of resources) {
-    const base = resource.basePath.replace(/\/+$/, '');
-    const segs = pathname.replace(/\/+$/, '').split('/');
-    const baseSegs = base.split('/').filter(Boolean);
-    const pathSegs = segs.filter(Boolean);
-
-    // Exact match: GET/POST on base path (list / create)
-    if (pathSegs.length === baseSegs.length) {
-      const match = baseSegs.every((seg, i) => seg === pathSegs[i]);
-      if (match && (method === 'GET' || method === 'POST')) {
-        return { resource };
-      }
-    }
-
-    // ID match: GET/PUT/PATCH/DELETE on base path + /:id
-    if (pathSegs.length === baseSegs.length + 1) {
-      const match = baseSegs.every((seg, i) => seg === pathSegs[i]);
-      if (match && ['GET', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-        return { resource, id: decodeURIComponent(pathSegs[pathSegs.length - 1]) };
-      }
-    }
-  }
-
-  return null;
-}
-
-// ── Resource CRUD handler ─────────────────────────
-
-function handleResourceCrud(
-  method: string,
-  match: ResourceMatch,
-  body: JsonValue,
-  query: Record<string, string>,
-): { status: number; data: JsonValue; headers?: Record<string, string> } {
-  const { resource, id } = match;
-
-  // GET collection (list)
-  if (method === 'GET' && !id) {
-    const { limit, offset, ...filters } = query;
-    const parsedLimit = limit !== undefined ? parseInt(limit) : undefined;
-    const parsedOffset = offset !== undefined ? parseInt(offset) : undefined;
-    const result = store.list(resource.name, filters, parsedLimit, parsedOffset);
-    const headers: Record<string, string> = { 'X-Total-Count': String(result.total) };
-    return { status: 200, data: result.items as JsonValue, headers };
-  }
-
-  // GET single item
-  if (method === 'GET' && id) {
-    const item = store.get(resource.name, id);
-    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
-    return { status: 200, data: item as JsonValue };
-  }
-
-  // POST create
-  if (method === 'POST') {
-    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
-    const item = store.create(resource.name, incoming);
-    return { status: 201, data: item as JsonValue };
-  }
-
-  // PUT full replace
-  if (method === 'PUT' && id) {
-    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
-    const item = store.update(resource.name, id, incoming);
-    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
-    return { status: 200, data: item as JsonValue };
-  }
-
-  // PATCH partial merge
-  if (method === 'PATCH' && id) {
-    const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
-    const item = store.patch(resource.name, id, incoming);
-    if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
-    return { status: 200, data: item as JsonValue };
-  }
-
-  // DELETE
-  if (method === 'DELETE' && id) {
-    const removed = store.remove(resource.name, id);
-    if (!removed) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
-    return { status: 204, data: null };
-  }
-
-  return { status: 405, data: { error: 'Method Not Allowed' } };
-}
-
-// ── Request handler ────────────────────────────────
-
-async function handleRequest(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  options: ServerOptions,
-): Promise<void> {
-  const start = Date.now();
-  const method = req.method!.toUpperCase();
-  const pathname = new URL(req.url!, `http://${req.headers.host}`).pathname;
-
-  // CORS
-  if (options.cors) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
-    res.setHeader('Access-Control-Max-Age', '86400');
-
-    if (method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      logRequest(method, pathname, 204, Date.now() - start);
-      return;
-    }
-  }
-
-  // Dashboard and API
-  if (pathname.startsWith('/__dashboard') || pathname.startsWith('/__api/')) {
-    const dashBody = await parseBody(req);
-    const dashCtx: DashboardContext = {
-      routes, resources, options, store,
-      routeOverrides, resourceOverrides, subscribeLog,
-    };
-    const handled = await handleDashboardRequest(req, res, pathname, method, dashBody, dashCtx);
-    if (handled) return;
-  }
-
-  // Reset endpoint
-  if (method === 'POST' && pathname === '/__reset') {
-    store.reset();
-    const resBody = JSON.stringify({ message: 'All collections re-seeded' });
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(resBody);
-    logRequest(method, pathname, 200, Date.now() - start);
-    console.log(`  ${c.success('↻')}  ${c.dim('Store reset — all collections re-seeded')}`);
-    return;
-  }
-
-  // Match custom routes first
-  const match = matchRoute(method, pathname);
-
-  if (match) {
-    const { route, params } = match;
-    const routeIdx = routes.indexOf(route);
-    const override = routeOverrides.get(routeIdx);
-
-    // Check disabled override
-    if (override?.disabled) {
-      const body = JSON.stringify({ error: 'Service Unavailable', message: 'This endpoint is temporarily disabled via dashboard' });
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(body);
-      logRequest(method, pathname, 503, Date.now() - start);
-      return;
-    }
-
-    // Delay (override takes precedence)
-    const delay = override?.delay ?? route.delay ?? options.delay ?? 0;
-    if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
-
-    // Random error simulation (override takes precedence)
-    const errorRate = override?.error ?? route.error ?? 0;
-    if (errorRate > 0 && Math.random() < errorRate) {
-      const errStatus = route.errorStatus || 500;
-      const body = JSON.stringify({
-        error: http.STATUS_CODES[errStatus] || 'Error',
-        message: 'Simulated failure (quickmock error injection)',
-      });
-      res.writeHead(errStatus, { 'Content-Type': 'application/json' });
-      res.end(body);
-      logRequest(method, pathname, errStatus, Date.now() - start);
-      return;
-    }
-
-    // Build template context
-    const reqBody = await parseBody(req);
-    const query   = parseQuery(req.url!);
-    const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
-
-    // Pick response (support "responses" array for random variants)
-    let responseData: JsonValue | undefined = route.response;
-    if (route.responses && route.responses.length > 0) {
-      responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
-    }
-
-    // Process templates
-    if (responseData !== undefined && responseData !== null) {
-      responseData = processTemplate(responseData, ctx);
-    }
-
-    // Send
-    const status  = route.status || 200;
-    const headers = { 'Content-Type': 'application/json', ...route.headers };
-
-    res.writeHead(status, headers);
-
-    if (responseData !== undefined && responseData !== null) {
-      res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
-    } else {
-      res.end();
-    }
-
-    logRequest(method, pathname, status, Date.now() - start);
-    return;
-  }
-
-  // Match resource routes
-  const resourceMatch = matchResource(method, pathname);
-
-  if (resourceMatch) {
-    const { resource } = resourceMatch;
-    const override = resourceOverrides.get(resource.name);
-
-    // Check disabled override
-    if (override?.disabled) {
-      const body = JSON.stringify({ error: 'Service Unavailable', message: 'This resource is temporarily disabled via dashboard' });
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(body);
-      logRequest(method, pathname, 503, Date.now() - start);
-      return;
-    }
-
-    // Per-resource delay (override takes precedence)
-    const delay = override?.delay ?? resource.delay ?? options.delay ?? 0;
-    if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
-
-    // Per-resource error injection (override takes precedence)
-    const errorRate = override?.error ?? resource.error ?? 0;
-    if (errorRate > 0 && Math.random() < errorRate) {
-      const errStatus = resource.errorStatus || 500;
-      const body = JSON.stringify({
-        error: http.STATUS_CODES[errStatus] || 'Error',
-        message: 'Simulated failure (quickmock error injection)',
-      });
-      res.writeHead(errStatus, { 'Content-Type': 'application/json' });
-      res.end(body);
-      logRequest(method, pathname, errStatus, Date.now() - start);
-      return;
-    }
-
-    const reqBody = await parseBody(req);
-    const query   = parseQuery(req.url!);
-    const result  = handleResourceCrud(method, resourceMatch, reqBody, query);
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(result.headers ?? {}) };
-    res.writeHead(result.status, headers);
-
-    if (result.data !== null && result.data !== undefined) {
-      res.end(JSON.stringify(result.data, null, 2));
-    } else {
-      res.end();
-    }
-
-    logRequest(method, pathname, result.status, Date.now() - start);
-    return;
-  }
-
-  // 404
-  const body = JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` });
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(body);
-  logRequest(method, pathname, 404, Date.now() - start);
-}
-
-// ── Logging ────────────────────────────────────────
-
-function logRequest(method: string, pathname: string, status: number, ms: number): void {
-  const mFn  = c.method[method] ?? c.dim;
-  const mStr = mFn(method.padEnd(7));
-  console.log(`  ${mStr} ${c.path(pathname)}  ${c.dim('→')}  ${c.status(status)}  ${c.dim('in')} ${c.time(ms + 'ms')}`);
-  emitLog({ method, path: pathname, status, ms, timestamp: Date.now() });
-}
-
-// ── Route loader ───────────────────────────────────
-
-/** Empty template context used for seed generation (no request data). */
+/** Empty template context used for seed generation. */
 const EMPTY_CTX: TemplateContext = {
   params: {},
   body: null,
@@ -413,12 +67,8 @@ const EMPTY_CTX: TemplateContext = {
   headers: {},
 };
 
-async function loadRoutes(filePath: string): Promise<Route[]> {
-  const content = await fs.readFile(filePath, 'utf-8');
-  const config  = JSON.parse(content) as RoutesFileConfig | RouteConfig[];
-  const raw     = Array.isArray(config) ? config : (config.routes ?? []);
-
-  routes = raw.map((r): Route => ({
+function parseRouteConfigs(raw: RouteConfig[]): Route[] {
+  return raw.map((r): Route => ({
     method:      (r.method || 'GET').toUpperCase(),
     path:        r.path,
     status:      r.status || 200,
@@ -429,16 +79,16 @@ async function loadRoutes(filePath: string): Promise<Route[]> {
     error:       r.error,
     errorStatus: r.errorStatus,
   }));
+}
 
-  // Parse and seed resources
-  const resourceDefs = !Array.isArray(config) ? (config.resources ?? {}) : {};
-  resources = [];
-
+function seedResources(
+  resourceDefs: Record<string, ResourceConfig>,
+  store: Store,
+): ResourceEntry[] {
+  const entries: ResourceEntry[] = [];
   for (const [name, cfg] of Object.entries(resourceDefs)) {
     const idField = cfg.idField ?? 'id';
     const count   = cfg.count ?? 5;
-
-    // Generate seed items by processing the template N times
     const seedItems: JsonRecord[] = [];
     for (let i = 0; i < count; i++) {
       const processed = processTemplate(cfg.seed, EMPTY_CTX);
@@ -446,9 +96,8 @@ async function loadRoutes(filePath: string): Promise<Route[]> {
         seedItems.push(processed as JsonRecord);
       }
     }
-
     store.seed(name, idField, seedItems);
-    resources.push({
+    entries.push({
       name,
       basePath: cfg.basePath,
       idField,
@@ -457,81 +106,347 @@ async function loadRoutes(filePath: string): Promise<Route[]> {
       errorStatus: cfg.errorStatus,
     });
   }
-
-  return routes;
+  return entries;
 }
 
-// ── Startup banner ─────────────────────────────────
+// ── MockServer interface ──────────────────────────
 
-function printBanner(routesFile: string, options: ServerOptions, routeList: Route[]): void {
-  const W = 54;
-
-  console.log('');
-  console.log(`  ${c.brand('◆  quickmock  ◆')}`);
-  console.log(`  ${c.dim('Mock API server running')}`);
-  console.log('');
-  console.log(`  ${c.dim('URL')}        ${c.success(`http://${options.host}:${options.port}`)}`);
-  console.log(`  ${c.dim('Dashboard')}  ${c.success(`http://${options.host}:${options.port}/__dashboard`)}`);
-  console.log(`  ${c.dim('Routes')}     ${c.path(path.resolve(routesFile))}`);
-  console.log(`  ${c.dim('CORS')}       ${options.cors ? c.success('enabled') : c.warn('disabled')}`);
-  console.log(`  ${c.dim('Watch')}      ${options.watch ? c.success('enabled') : c.dim('disabled')}`);
-  if (options.delay > 0) {
-    console.log(`  ${c.dim('Delay')}      ${c.time(options.delay + 'ms')}`);
-  }
-  console.log('');
-
-  // Custom routes
-  if (routeList.length > 0) {
-    console.log(`  ${c.dim('Registered routes:')}`);
-    console.log(`  ${c.dim('─'.repeat(W))}`);
-
-    for (const route of routeList) {
-      const mFn  = c.method[route.method] ?? c.dim;
-      const mStr = mFn(route.method.padEnd(8));
-      const sStr = c.status(route.status);
-      const extras: string[] = [];
-      if (route.delay)              extras.push(c.time(`${route.delay}ms`));
-      if (route.error)              extras.push(c.warn(`${(route.error * 100).toFixed(0)}% fail`));
-      if (route.responses?.length)  extras.push(c.dim(`${route.responses.length} variants`));
-      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
-
-      console.log(`  ${mStr}${c.path(route.path.padEnd(25))} ${c.dim('→')} ${sStr}${extStr}`);
-    }
-
-    console.log(`  ${c.dim('─'.repeat(W))}`);
-    console.log('');
-  }
-
-  // Resources
-  if (resources.length > 0) {
-    console.log(`  ${c.dim('Resources (stateful):')}`);
-    console.log(`  ${c.dim('─'.repeat(W))}`);
-
-    for (const res of resources) {
-      const result = store.list(res.name);
-      const extras: string[] = [];
-      if (res.delay) extras.push(c.time(`${res.delay}ms`));
-      if (res.error) extras.push(c.warn(`${(res.error * 100).toFixed(0)}% fail`));
-      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
-
-      console.log(`  ${c.success(res.name.padEnd(10))}${c.path(res.basePath.padEnd(25))} ${c.dim(`${result.total} items`)}${extStr}`);
-    }
-
-    console.log(`  ${c.dim('─'.repeat(W))}`);
-    console.log(`  ${c.dim('POST /__reset to re-seed all collections')}`);
-    console.log('');
-  }
-
-  console.log(`  ${c.dim('Waiting for requests...')}  ${c.dim('(Ctrl+C to stop)')}`);
-  console.log('');
+export interface MockServer {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  reload(config: MockServerConfig): void;
+  getRoutes(): Route[];
+  getResources(): ResourceEntry[];
+  getStore(): Store;
+  getConfig(): MockServerConfig;
+  routeOverrides: Map<number, RuntimeOverride>;
+  resourceOverrides: Map<string, RuntimeOverride>;
+  subscribeLog(listener: LogListener): () => void;
+  readonly running: boolean;
+  readonly port: number;
+  readonly host: string;
 }
 
-// ── Public entry point ─────────────────────────────
+// ── Factory ───────────────────────────────────────
+
+export function createMockServer(config: MockServerConfig): MockServer {
+  let routes: Route[] = [];
+  let resources: ResourceEntry[] = [];
+  const store: Store = createStore();
+  const routeOverrides    = new Map<number, RuntimeOverride>();
+  const resourceOverrides = new Map<string, RuntimeOverride>();
+  const logListeners      = new Set<LogListener>();
+  let httpServer: http.Server | null = null;
+  let _running = false;
+  let currentConfig = config;
+
+  // ── Apply config ──────────────────────────────
+
+  function applyConfig(cfg: MockServerConfig): void {
+    currentConfig = cfg;
+    routes = parseRouteConfigs(cfg.routes ?? []);
+    resources = seedResources(cfg.resources ?? {}, store);
+  }
+
+  // ── Route matching ────────────────────────────
+
+  interface RouteMatch { route: Route; params: Record<string, string>; }
+
+  function matchRoute(method: string, pathname: string): RouteMatch | null {
+    for (const route of routes) {
+      if (route.method !== method && route.method !== '*') continue;
+      const rSegs = route.path.split('/').filter(Boolean);
+      const pSegs = pathname.split('/').filter(Boolean);
+      if (rSegs.length !== pSegs.length) continue;
+      const params: Record<string, string> = {};
+      let ok = true;
+      for (let i = 0; i < rSegs.length; i++) {
+        if (rSegs[i].startsWith(':')) {
+          params[rSegs[i].slice(1)] = decodeURIComponent(pSegs[i]);
+        } else if (rSegs[i] !== pSegs[i]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return { route, params };
+    }
+    return null;
+  }
+
+  // ── Resource matching ─────────────────────────
+
+  interface ResourceMatch { resource: ResourceEntry; id?: string; }
+
+  function matchResource(method: string, pathname: string): ResourceMatch | null {
+    for (const resource of resources) {
+      const base = resource.basePath.replace(/\/+$/, '');
+      const baseSegs = base.split('/').filter(Boolean);
+      const pathSegs = pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+
+      if (pathSegs.length === baseSegs.length) {
+        if (baseSegs.every((seg, i) => seg === pathSegs[i]) && (method === 'GET' || method === 'POST')) {
+          return { resource };
+        }
+      }
+      if (pathSegs.length === baseSegs.length + 1) {
+        if (baseSegs.every((seg, i) => seg === pathSegs[i]) && ['GET', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+          return { resource, id: decodeURIComponent(pathSegs[pathSegs.length - 1]) };
+        }
+      }
+    }
+    return null;
+  }
+
+  // ── Resource CRUD ─────────────────────────────
+
+  function handleResourceCrud(
+    method: string,
+    match: ResourceMatch,
+    body: JsonValue,
+    query: Record<string, string>,
+  ): { status: number; data: JsonValue; headers?: Record<string, string> } {
+    const { resource, id } = match;
+
+    if (method === 'GET' && !id) {
+      const { limit, offset, ...filters } = query;
+      const result = store.list(resource.name, filters,
+        limit !== undefined ? parseInt(limit) : undefined,
+        offset !== undefined ? parseInt(offset) : undefined);
+      return { status: 200, data: result.items as JsonValue, headers: { 'X-Total-Count': String(result.total) } };
+    }
+    if (method === 'GET' && id) {
+      const item = store.get(resource.name, id);
+      if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+      return { status: 200, data: item as JsonValue };
+    }
+    if (method === 'POST') {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+      return { status: 201, data: store.create(resource.name, incoming) as JsonValue };
+    }
+    if (method === 'PUT' && id) {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+      const item = store.update(resource.name, id, incoming);
+      if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+      return { status: 200, data: item as JsonValue };
+    }
+    if (method === 'PATCH' && id) {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as JsonRecord;
+      const item = store.patch(resource.name, id, incoming);
+      if (!item) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+      return { status: 200, data: item as JsonValue };
+    }
+    if (method === 'DELETE' && id) {
+      const removed = store.remove(resource.name, id);
+      if (!removed) return { status: 404, data: { error: 'Not Found', message: `${resource.name} "${id}" not found` } };
+      return { status: 204, data: null };
+    }
+    return { status: 405, data: { error: 'Method Not Allowed' } };
+  }
+
+  // ── Logging ───────────────────────────────────
+
+  function emitLog(entry: LogEntry): void {
+    for (const listener of logListeners) listener(entry);
+  }
+
+  function logRequest(method: string, pathname: string, status: number, ms: number): void {
+    const mFn  = c.method[method] ?? c.dim;
+    const mStr = mFn(method.padEnd(7));
+    console.log(`  ${mStr} ${c.path(pathname)}  ${c.dim('→')}  ${c.status(status)}  ${c.dim('in')} ${c.time(ms + 'ms')}`);
+    emitLog({ method, path: pathname, status, ms, timestamp: Date.now(), serverId: currentConfig.id });
+  }
+
+  // ── Request handler ───────────────────────────
+
+  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const start = Date.now();
+    const method = req.method!.toUpperCase();
+    const pathname = new URL(req.url!, `http://${req.headers.host}`).pathname;
+
+    // CORS
+    if (currentConfig.cors) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      if (method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        logRequest(method, pathname, 204, Date.now() - start);
+        return;
+      }
+    }
+
+    // Reset endpoint
+    if (method === 'POST' && pathname === '/__reset') {
+      store.reset();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: 'All collections re-seeded' }));
+      logRequest(method, pathname, 200, Date.now() - start);
+      return;
+    }
+
+    // Custom routes
+    const match = matchRoute(method, pathname);
+    if (match) {
+      const { route, params } = match;
+      const routeIdx = routes.indexOf(route);
+      const override = routeOverrides.get(routeIdx);
+
+      if (override?.disabled) {
+        const body = JSON.stringify({ error: 'Service Unavailable', message: 'Endpoint temporarily disabled' });
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(body);
+        logRequest(method, pathname, 503, Date.now() - start);
+        return;
+      }
+
+      const delay = override?.delay ?? route.delay ?? currentConfig.delay ?? 0;
+      if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
+
+      const errorRate = override?.error ?? route.error ?? 0;
+      if (errorRate > 0 && Math.random() < errorRate) {
+        const errStatus = route.errorStatus || 500;
+        res.writeHead(errStatus, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: http.STATUS_CODES[errStatus] || 'Error', message: 'Simulated failure' }));
+        logRequest(method, pathname, errStatus, Date.now() - start);
+        return;
+      }
+
+      const reqBody = await parseBody(req);
+      const query   = parseQuery(req.url!);
+      const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
+
+      let responseData: JsonValue | undefined = route.response;
+      if (route.responses && route.responses.length > 0) {
+        responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
+      }
+      if (responseData !== undefined && responseData !== null) {
+        responseData = processTemplate(responseData, ctx);
+      }
+
+      const status  = route.status || 200;
+      const headers = { 'Content-Type': 'application/json', ...route.headers };
+      res.writeHead(status, headers);
+      if (responseData !== undefined && responseData !== null) {
+        res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
+      } else {
+        res.end();
+      }
+      logRequest(method, pathname, status, Date.now() - start);
+      return;
+    }
+
+    // Resource routes
+    const resourceMatch = matchResource(method, pathname);
+    if (resourceMatch) {
+      const { resource } = resourceMatch;
+      const override = resourceOverrides.get(resource.name);
+
+      if (override?.disabled) {
+        const body = JSON.stringify({ error: 'Service Unavailable', message: 'Resource temporarily disabled' });
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(body);
+        logRequest(method, pathname, 503, Date.now() - start);
+        return;
+      }
+
+      const delay = override?.delay ?? resource.delay ?? currentConfig.delay ?? 0;
+      if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
+
+      const errorRate = override?.error ?? resource.error ?? 0;
+      if (errorRate > 0 && Math.random() < errorRate) {
+        const errStatus = resource.errorStatus || 500;
+        res.writeHead(errStatus, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: http.STATUS_CODES[errStatus] || 'Error', message: 'Simulated failure' }));
+        logRequest(method, pathname, errStatus, Date.now() - start);
+        return;
+      }
+
+      const reqBody = await parseBody(req);
+      const query   = parseQuery(req.url!);
+      const result  = handleResourceCrud(method, resourceMatch, reqBody, query);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(result.headers ?? {}) };
+      res.writeHead(result.status, headers);
+      if (result.data !== null && result.data !== undefined) {
+        res.end(JSON.stringify(result.data, null, 2));
+      } else {
+        res.end();
+      }
+      logRequest(method, pathname, result.status, Date.now() - start);
+      return;
+    }
+
+    // 404
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` }));
+    logRequest(method, pathname, 404, Date.now() - start);
+  }
+
+  // ── Lifecycle ─────────────────────────────────
+
+  applyConfig(config);
+
+  function subscribeLog(listener: LogListener): () => void {
+    logListeners.add(listener);
+    return () => logListeners.delete(listener);
+  }
+
+  async function start(): Promise<void> {
+    if (_running) return;
+    httpServer = http.createServer((req, res) => {
+      handleRequest(req, res).catch((err: unknown) => {
+        console.error(`  ${c.error('Error:')} ${(err as Error).message}`);
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal Server Error' }));
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      httpServer!.listen(currentConfig.port, currentConfig.host, () => resolve());
+      httpServer!.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') reject(new Error(`Port ${currentConfig.port} is already in use`));
+        else reject(err);
+      });
+    });
+    _running = true;
+  }
+
+  async function stop(): Promise<void> {
+    if (!_running || !httpServer) return;
+    await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
+    httpServer = null;
+    _running = false;
+  }
+
+  function reload(newConfig: MockServerConfig): void {
+    applyConfig(newConfig);
+    routeOverrides.clear();
+    resourceOverrides.clear();
+  }
+
+  return {
+    start,
+    stop,
+    reload,
+    getRoutes:     () => routes,
+    getResources:  () => resources,
+    getStore:      () => store,
+    getConfig:     () => currentConfig,
+    routeOverrides,
+    resourceOverrides,
+    subscribeLog,
+    get running() { return _running; },
+    get port()    { return currentConfig.port; },
+    get host()    { return currentConfig.host; },
+  };
+}
+
+// ── Legacy entry point (backwards compatible) ────
 
 export async function startServer(routesFile: string, options: ServerOptions): Promise<void> {
   const resolved = path.resolve(routesFile);
 
-  // Check routes file exists
   try {
     await fs.access(resolved);
   } catch {
@@ -540,48 +455,94 @@ export async function startServer(routesFile: string, options: ServerOptions): P
     );
   }
 
-  // Load routes and resources
-  const routeList = await loadRoutes(resolved);
-  if (routeList.length === 0 && resources.length === 0) {
-    throw new Error('No routes or resources defined in the routes file');
-  }
+  const content = await fs.readFile(resolved, 'utf-8');
+  const fileConfig = JSON.parse(content) as RoutesFileConfig | RouteConfig[];
+  const routeConfigs = Array.isArray(fileConfig) ? fileConfig : (fileConfig.routes ?? []);
+  const resourceDefs = !Array.isArray(fileConfig) ? (fileConfig.resources ?? {}) : {};
 
-  // Create server
-  const server = http.createServer((req, res) => {
-    handleRequest(req, res, options).catch((err: unknown) => {
-      console.error(`  ${c.error('Error:')} ${(err as Error).message}`);
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-      }
-      res.end(JSON.stringify({ error: 'Internal Server Error' }));
-    });
-  });
+  const config: MockServerConfig = {
+    id: 'legacy',
+    name: path.basename(routesFile, '.json'),
+    port: options.port,
+    host: options.host,
+    cors: options.cors,
+    delay: options.delay,
+    routes: routeConfigs,
+    resources: resourceDefs,
+    profiles: {},
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
 
-  // Start listening
-  await new Promise<void>((resolve, reject) => {
-    server.listen(options.port, options.host, () => resolve());
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        reject(new Error(`Port ${options.port} is already in use`));
-      } else {
-        reject(err);
-      }
-    });
-  });
+  const server = createMockServer(config);
+  await server.start();
 
   // Banner
-  printBanner(routesFile, options, routeList);
+  const W = 54;
+  const routeList = server.getRoutes();
+  const resList   = server.getResources();
+
+  console.log('');
+  console.log(`  ${c.brand('◆  quickmock  ◆')}`);
+  console.log(`  ${c.dim('Mock API server running')}`);
+  console.log('');
+  console.log(`  ${c.dim('URL')}        ${c.success(`http://${options.host}:${options.port}`)}`);
+  console.log(`  ${c.dim('Routes')}     ${c.path(resolved)}`);
+  console.log(`  ${c.dim('CORS')}       ${options.cors ? c.success('enabled') : c.warn('disabled')}`);
+  console.log(`  ${c.dim('Watch')}      ${options.watch ? c.success('enabled') : c.dim('disabled')}`);
+  if (options.delay > 0) {
+    console.log(`  ${c.dim('Delay')}      ${c.time(options.delay + 'ms')}`);
+  }
+  console.log('');
+
+  if (routeList.length > 0) {
+    console.log(`  ${c.dim('Registered routes:')}`);
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    for (const route of routeList) {
+      const mFn  = c.method[route.method] ?? c.dim;
+      const mStr = mFn(route.method.padEnd(8));
+      const extras: string[] = [];
+      if (route.delay)              extras.push(c.time(`${route.delay}ms`));
+      if (route.error)              extras.push(c.warn(`${(route.error * 100).toFixed(0)}% fail`));
+      if (route.responses?.length)  extras.push(c.dim(`${route.responses.length} variants`));
+      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
+      console.log(`  ${mStr}${c.path(route.path.padEnd(25))} ${c.dim('→')} ${c.status(route.status)}${extStr}`);
+    }
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    console.log('');
+  }
+
+  if (resList.length > 0) {
+    console.log(`  ${c.dim('Resources (stateful):')}`);
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    for (const res of resList) {
+      const result = server.getStore().list(res.name);
+      const extras: string[] = [];
+      if (res.delay) extras.push(c.time(`${res.delay}ms`));
+      if (res.error) extras.push(c.warn(`${(res.error * 100).toFixed(0)}% fail`));
+      const extStr = extras.length ? `  ${c.dim('[')}${extras.join(c.dim(', '))}${c.dim(']')}` : '';
+      console.log(`  ${c.success(res.name.padEnd(10))}${c.path(res.basePath.padEnd(25))} ${c.dim(`${result.total} items`)}${extStr}`);
+    }
+    console.log(`  ${c.dim('─'.repeat(W))}`);
+    console.log(`  ${c.dim('POST /__reset to re-seed all collections')}`);
+    console.log('');
+  }
+
+  console.log(`  ${c.dim('Waiting for requests...')}  ${c.dim('(Ctrl+C to stop)')}`);
+  console.log('');
 
   // Auto-reload
   if (options.watch) {
     watchFile(resolved, async () => {
       try {
-        const updated = await loadRoutes(resolved);
-        routeOverrides.clear();
-        resourceOverrides.clear();
+        const newContent = await fs.readFile(resolved, 'utf-8');
+        const newFileConfig = JSON.parse(newContent) as RoutesFileConfig | RouteConfig[];
+        const newRoutes = Array.isArray(newFileConfig) ? newFileConfig : (newFileConfig.routes ?? []);
+        const newResources = !Array.isArray(newFileConfig) ? (newFileConfig.resources ?? {}) : {};
+        server.reload({ ...config, routes: newRoutes, resources: newResources, updatedAt: Date.now() });
         const parts = [];
-        if (updated.length > 0) parts.push(`${updated.length} routes`);
-        if (resources.length > 0) parts.push(`${resources.length} resources`);
+        if (server.getRoutes().length > 0) parts.push(`${server.getRoutes().length} routes`);
+        if (server.getResources().length > 0) parts.push(`${server.getResources().length} resources`);
         console.log(`  ${c.success('↻')}  ${c.dim('Reloaded')} ${c.dim(`(${parts.join(', ')})`)}`);
       } catch (err) {
         console.log(`  ${c.error('✗')}  ${c.dim('Reload failed:')} ${(err as Error).message}`);
@@ -589,10 +550,8 @@ export async function startServer(routesFile: string, options: ServerOptions): P
     });
   }
 
-  // Graceful shutdown
   process.on('SIGINT', () => {
     console.log(`\n  ${c.dim('Shutting down...')}\n`);
-    server.close();
-    process.exit(0);
+    server.stop().then(() => process.exit(0));
   });
 }

@@ -36,6 +36,15 @@ export interface ResourceConfig {
   errorStatus?: number;
 }
 
+export interface ResourceEntry {
+  name: string;
+  basePath: string;
+  idField: string;
+  delay?: number;
+  error?: number;
+  errorStatus?: number;
+}
+
 export interface RoutesFileConfig {
   routes?: RouteConfig[];
   resources?: Record<string, ResourceConfig>;
@@ -53,6 +62,7 @@ export interface LogEntry {
   status: number;
   ms: number;
   timestamp: number;
+  serverId?: string;
 }
 
 export interface RuntimeOverride {
@@ -62,6 +72,35 @@ export interface RuntimeOverride {
 }
 
 export type LogListener = (entry: LogEntry) => void;
+
+// ── Management types ─────────────────────────────
+
+export interface MockServerConfig {
+  id: string;
+  name: string;
+  description?: string;
+  port: number;
+  host: string;
+  cors: boolean;
+  delay: number;
+  routes: RouteConfig[];
+  resources: Record<string, ResourceConfig>;
+  profiles: Record<string, Profile>;
+  activeProfile?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Profile {
+  name: string;
+  description?: string;
+  disabledRoutes: number[];
+  disabledResources: string[];
+  overrides: {
+    routes: Record<number, RuntimeOverride>;
+    resources: Record<string, RuntimeOverride>;
+  };
+}
 
 // ── Server types ──────────────────────────────────
 

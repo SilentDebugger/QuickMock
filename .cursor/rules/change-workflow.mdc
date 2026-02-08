@@ -19,18 +19,29 @@ Every code change MUST follow this protocol:
 ## Dependency Reference
 
 ```
-src/cli.ts → src/server.ts → src/template.ts
-             ↓               src/store.ts
-             src/types.ts    src/dashboard.ts → src/types.ts
-                             src/watcher.ts      src/store.ts
-                             src/types.ts
+src/cli.ts → src/server.ts (startServer)
+             src/dashboard.ts (createManagementServer)
+             src/types.ts
+
+src/server.ts → src/template.ts, src/store.ts, src/watcher.ts, src/types.ts
+
+src/dashboard.ts → src/manager.ts → src/server.ts, src/project.ts, src/types.ts
+                   src/project.ts → src/types.ts
+                   src/schema/sql.ts → src/types.ts
+                   src/schema/openapi.ts → src/types.ts
+                   src/types.ts
+
+src/template.ts → src/types.ts
+src/store.ts → src/types.ts
 ```
 
-- Changing `types.ts` → check ALL modules (`cli`, `server`, `template`, `store`, `dashboard`)
-- Changing `template.ts`, `store.ts`, or `watcher.ts` → check `server.ts`
-- Changing `dashboard.ts` → check `server.ts`
-- Changing `server.ts` → check `cli.ts`, `template.ts`, `store.ts`, `watcher.ts`, `dashboard.ts`
-- Changing `cli.ts` → check `server.ts`
+- Changing `types.ts` → check ALL modules
+- Changing `server.ts` → check `cli.ts`, `manager.ts`
+- Changing `manager.ts` → check `dashboard.ts`
+- Changing `project.ts` → check `manager.ts`, `dashboard.ts`
+- Changing `dashboard.ts` → check `cli.ts`
+- Changing `template.ts` or `store.ts` → check `server.ts`
+- Changing `schema/*.ts` → check `dashboard.ts`
 
 ## Expansion Policy
 

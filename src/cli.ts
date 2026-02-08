@@ -1,9 +1,20 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import chalk from 'chalk';
 import { startServer } from './server.js';
+import { createManagementServer } from './dashboard.js';
 import type { ServerOptions } from './types.js';
 
 const args = process.argv.slice(2);
+
+// ── Color palette ──────────────────────────────────
+
+const c = {
+  brand:   chalk.bold.hex('#F472B6'),
+  success: chalk.hex('#10B981'),
+  dim:     chalk.hex('#6B7280'),
+  time:    chalk.hex('#06B6D4'),
+};
 
 // ── Help ───────────────────────────────────────────
 if (args.includes('--help') || args.includes('-h')) {
@@ -11,50 +22,23 @@ if (args.includes('--help') || args.includes('-h')) {
   quickmock — Zero-config mock API server
 
   Usage:
-    quickmock [routes-file] [options]
+    quickmock                    Start management UI (create & manage mock servers)
+    quickmock [routes-file]      Start a single mock server from file (legacy mode)
 
   Options:
     --port=N         Port to listen on (default: 3000)
     --host=HOST      Host to bind to (default: localhost)
-    --no-watch       Disable auto-reload on file changes
-    --no-cors        Disable CORS headers
+    --no-watch       Disable auto-reload on file changes (legacy mode)
+    --no-cors        Disable CORS headers (legacy mode)
     --delay=N        Global response delay in ms (default: 0)
     --init           Create an example routes.json
     --help, -h       Show this help
 
   Examples:
-    quickmock                    Start with routes.json in cwd
-    quickmock api-mock.json      Use a custom routes file
-    quickmock --port=8080        Listen on port 8080
-    quickmock --delay=200        Add 200ms latency to every response
+    quickmock                    Open the management dashboard
+    quickmock routes.json        Start single server with routes file
+    quickmock --port=4000        Management UI on port 4000
     quickmock --init             Generate example routes.json
-
-  Route file format:
-    {
-      "routes": [
-        {
-          "method": "GET",
-          "path": "/api/users/:id",
-          "status": 200,
-          "delay": 500,
-          "response": { "id": "{{params.id}}", "name": "{{faker.name}}" }
-        }
-      ]
-    }
-
-  Template variables:
-    {{params.xxx}}      URL path parameters
-    {{query.xxx}}       Query string parameters
-    {{body.xxx}}        Request body fields
-    {{headers.xxx}}     Request headers
-    {{faker.name}}      Random full name
-    {{faker.email}}     Random email
-    {{faker.id}}        Random UUID
-    {{faker.number}}    Random integer
-    {{faker.boolean}}   Random true/false
-    {{faker.date}}      Random ISO date
-    {{faker.lorem}}     Random sentence
-    ... and more (see docs)
   `);
   process.exit(0);
 }
@@ -118,28 +102,61 @@ if (args.includes('--init')) {
 
 // ── Parse options ──────────────────────────────────
 const flags = args.filter(a => a.startsWith('--'));
-const routesFile = args.find(a => !a.startsWith('-')) || 'routes.json';
-
-const options: ServerOptions = {
-  port: 3000,
-  host: 'localhost',
-  watch: !flags.includes('--no-watch'),
-  cors: !flags.includes('--no-cors'),
-  delay: 0,
-};
+const routesFile = args.find(a => !a.startsWith('-'));
 
 const portFlag = flags.find(f => f.startsWith('--port='));
-if (portFlag) options.port = parseInt(portFlag.split('=')[1]) || 3000;
+const port = portFlag ? (parseInt(portFlag.split('=')[1]) || 3000) : 3000;
 
 const hostFlag = flags.find(f => f.startsWith('--host='));
-if (hostFlag) options.host = hostFlag.split('=')[1] || 'localhost';
+const host = hostFlag ? (hostFlag.split('=')[1] || 'localhost') : 'localhost';
 
-const delayFlag = flags.find(f => f.startsWith('--delay='));
-if (delayFlag) options.delay = parseInt(delayFlag.split('=')[1]) || 0;
+// ── Decide mode ────────────────────────────────────
 
-// ── Start ──────────────────────────────────────────
+if (routesFile) {
+  // Legacy single-server mode
+  const options: ServerOptions = {
+    port,
+    host,
+    watch: !flags.includes('--no-watch'),
+    cors: !flags.includes('--no-cors'),
+    delay: 0,
+  };
+  const delayFlag = flags.find(f => f.startsWith('--delay='));
+  if (delayFlag) options.delay = parseInt(delayFlag.split('=')[1]) || 0;
 
-startServer(routesFile, options).catch((err: Error) => {
-  console.error(`\n  Error: ${err.message}\n`);
-  process.exit(1);
-});
+  startServer(routesFile, options).catch((err: Error) => {
+    console.error(`\n  Error: ${err.message}\n`);
+    process.exit(1);
+  });
+} else {
+  // Management mode
+  const server = createManagementServer(port, host);
+
+  server.listen(port, host, () => {
+    console.log('');
+    console.log(`  ${c.brand('◆  quickmock  ◆')}`);
+    console.log(`  ${c.dim('Management dashboard running')}`);
+    console.log('');
+    console.log(`  ${c.dim('Dashboard')}  ${c.success(`http://${host}:${port}/__dashboard`)}`);
+    console.log(`  ${c.dim('API')}        ${c.success(`http://${host}:${port}/__api/servers`)}`);
+    console.log('');
+    console.log(`  ${c.dim('Open the dashboard to create and manage mock servers.')}`);
+    console.log(`  ${c.dim('Or run')} ${chalk.bold('quickmock routes.json')} ${c.dim('for single-server mode.')}`);
+    console.log('');
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n  Error: Port ${port} is already in use\n`);
+    } else {
+      console.error(`\n  Error: ${err.message}\n`);
+    }
+    process.exit(1);
+  });
+
+  process.on('SIGINT', () => {
+    console.log(`\n  ${c.dim('Shutting down...')}\n`);
+    server.close();
+    process.exit(0);
+  });
+}
