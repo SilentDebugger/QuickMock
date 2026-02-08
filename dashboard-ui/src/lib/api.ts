@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerDetail, MockServerConfig, RouteConfig, ResourceConfig } from './types';
+import type { ServerStatus, ServerDetail, MockServerConfig, RouteConfig, ResourceConfig, RecordedResponse } from './types';
 
 const BASE = '/__api';
 
@@ -66,4 +66,28 @@ export const schema = {
 export const overrides = {
   patchRoute:    (serverId: string, idx: number, data: unknown) => request<void>(`/servers/${serverId}/overrides/routes/${idx}`, { method: 'PATCH', body: JSON.stringify(data) }),
   patchResource: (serverId: string, name: string, data: unknown) => request<void>(`/servers/${serverId}/overrides/resources/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+};
+
+// ── Docs & types ──────────────────────────────────
+
+export const docs = {
+  markdown: async (serverId: string): Promise<string> => {
+    const res = await fetch(`${BASE}/servers/${serverId}/docs`);
+    if (!res.ok) throw new Error('Failed to fetch docs');
+    return res.text();
+  },
+  types: async (serverId: string): Promise<string> => {
+    const res = await fetch(`${BASE}/servers/${serverId}/types`);
+    if (!res.ok) throw new Error('Failed to fetch types');
+    return res.text();
+  },
+  exportConfig: (serverId: string) => `${BASE}/servers/${serverId}/export`,
+};
+
+// ── Recordings ────────────────────────────────────
+
+export const recordings = {
+  list:    (serverId: string) => request<RecordedResponse[]>(`/servers/${serverId}/recordings`),
+  clear:   (serverId: string) => request<void>(`/servers/${serverId}/recordings`, { method: 'DELETE' }),
+  promote: (serverId: string, idx: number) => request<RouteConfig>(`/servers/${serverId}/recordings/${idx}/promote`, { method: 'POST' }),
 };

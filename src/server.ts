@@ -9,7 +9,7 @@ import type { Store } from './store.js';
 import type {
   Route, RouteConfig, ResourceConfig, ResourceEntry, RoutesFileConfig,
   MockServerConfig, ServerOptions, TemplateContext,
-  JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride,
+  JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride, RecordedResponse,
 } from './types.js';
 
 // ── Color palette ──────────────────────────────────
@@ -122,6 +122,7 @@ export interface MockServer {
   routeOverrides: Map<number, RuntimeOverride>;
   resourceOverrides: Map<string, RuntimeOverride>;
   subscribeLog(listener: LogListener): () => void;
+  onProxyResponse: ((entry: RecordedResponse) => void) | null;
   readonly running: boolean;
   readonly port: number;
   readonly host: string;
@@ -139,6 +140,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
   let httpServer: http.Server | null = null;
   let _running = false;
   let currentConfig = config;
+  let onProxyResponse: ((entry: RecordedResponse) => void) | null = null;
 
   // ── Apply config ──────────────────────────────
 
@@ -377,6 +379,58 @@ export function createMockServer(config: MockServerConfig): MockServer {
       return;
     }
 
+    // Proxy: forward unmatched requests to real API if proxyTarget is set
+    if (currentConfig.proxyTarget) {
+      try {
+        const targetUrl = currentConfig.proxyTarget.replace(/\/+$/, '') + pathname;
+        const reqBody = method !== 'GET' && method !== 'HEAD' ? await parseBody(req) : undefined;
+
+        const proxyRes = await fetch(targetUrl, {
+          method,
+          headers: {
+            ...Object.fromEntries(
+              Object.entries(req.headers)
+                .filter(([k]) => !['host', 'connection'].includes(k))
+                .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v ?? '']),
+            ),
+          },
+          body: reqBody !== undefined && reqBody !== null ? JSON.stringify(reqBody) : undefined,
+        });
+
+        const proxyBody = await proxyRes.text();
+        const proxyStatus = proxyRes.status;
+
+        // Collect response headers
+        const respHeaders: Record<string, string> = {};
+        proxyRes.headers.forEach((val, key) => { respHeaders[key] = val; });
+
+        // Record the response for later promotion
+        onProxyResponse?.({
+          method,
+          path: pathname,
+          status: proxyStatus,
+          responseHeaders: respHeaders,
+          body: proxyBody,
+          timestamp: Date.now(),
+        });
+
+        // Pipe response back to client
+        const outHeaders: Record<string, string> = { ...respHeaders };
+        delete outHeaders['transfer-encoding'];
+        delete outHeaders['content-encoding'];
+        delete outHeaders['content-length'];
+        res.writeHead(proxyStatus, outHeaders);
+        res.end(proxyBody);
+        logRequest(method, pathname, proxyStatus, Date.now() - start);
+        return;
+      } catch (err) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad Gateway', message: `Proxy failed: ${(err as Error).message}` }));
+        logRequest(method, pathname, 502, Date.now() - start);
+        return;
+      }
+    }
+
     // 404
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` }));
@@ -436,6 +490,8 @@ export function createMockServer(config: MockServerConfig): MockServer {
     routeOverrides,
     resourceOverrides,
     subscribeLog,
+    get onProxyResponse() { return onProxyResponse; },
+    set onProxyResponse(fn: ((entry: RecordedResponse) => void) | null) { onProxyResponse = fn; },
     get running() { return _running; },
     get port()    { return currentConfig.port; },
     get host()    { return currentConfig.host; },

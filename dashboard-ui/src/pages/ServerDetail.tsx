@@ -8,8 +8,10 @@ import ResourceEditor from '../components/ResourceEditor';
 import ProfileManager from '../components/ProfileManager';
 import LogViewer from '../components/LogViewer';
 import TryItPanel from '../components/TryItPanel';
+import DocsViewer from '../components/DocsViewer';
+import RecordingsViewer from '../components/RecordingsViewer';
 
-const TABS = ['Routes', 'Resources', 'Profiles', 'Try It', 'Logs', 'Settings'] as const;
+const TABS = ['Routes', 'Resources', 'Profiles', 'Try It', 'Logs', 'Docs', 'Recordings', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
 
 export default function ServerDetail() {
@@ -86,6 +88,8 @@ export default function ServerDetail() {
           ? <LogViewer url={`/__api/servers/${id}/log`} title={`${config.name} Log`} />
           : <div className="text-sm text-zinc-500 text-center py-8">Start the server to see live logs.</div>
         )}
+        {tab === 'Docs' && <DocsViewer serverId={id!} serverName={config.name} />}
+        {tab === 'Recordings' && <RecordingsViewer serverId={id!} />}
         {tab === 'Settings' && <ServerSettings config={config} onSave={(data) => updateServer.mutate({ id: id!, data })} />}
       </div>
     </div>
@@ -99,6 +103,7 @@ function ServerSettings({ config, onSave }: { config: import('../lib/types').Moc
   const [host, setHost] = useState(config.host);
   const [cors, setCors] = useState(config.cors);
   const [delay, setDelay] = useState(config.delay);
+  const [proxyTarget, setProxyTarget] = useState(config.proxyTarget ?? '');
 
   return (
     <div className="max-w-lg space-y-4">
@@ -137,8 +142,21 @@ function ServerSettings({ config, onSave }: { config: import('../lib/types').Moc
           </label>
         </div>
       </div>
+
+      {/* Proxy */}
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Proxy Target</label>
+        <input
+          value={proxyTarget}
+          onChange={e => setProxyTarget(e.target.value)}
+          placeholder="https://api.example.com/v1"
+          className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-sm font-mono focus:outline-none focus:border-pink-500 placeholder:text-zinc-600"
+        />
+        <p className="text-[10px] text-zinc-600 mt-1">When set, unmatched requests are proxied to this URL and recorded.</p>
+      </div>
+
       <button
-        onClick={() => onSave({ name, description, port, host, cors, delay })}
+        onClick={() => onSave({ name, description, port, host, cors, delay, proxyTarget: proxyTarget || undefined })}
         className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-md transition-colors"
       >
         <Save className="w-4 h-4" /> Save Settings

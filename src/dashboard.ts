@@ -6,6 +6,9 @@ import * as manager from './manager.js';
 import * as project from './project.js';
 import { parseSqlDdl } from './schema/sql.js';
 import { parseOpenApi } from './schema/openapi.js';
+import { generateDocs } from './docs.js';
+import { generateTypes } from './typegen.js';
+import * as recorder from './recorder.js';
 import type { MockServerConfig, RuntimeOverride, LogEntry, JsonValue, RouteConfig, ResourceConfig } from './types.js';
 
 // ── Static file serving ───────────────────────────
@@ -405,6 +408,72 @@ async function handleServerRoutes(
     instance.resourceOverrides.set(name, { ...existing, ...incoming });
     sendJson(res, 200, { name, override: instance.resourceOverrides.get(name) });
     return;
+  }
+
+  // ── Docs (markdown) ─────────────────────────
+
+  if (method === 'GET' && sub === 'docs') {
+    const config = await project.getServerConfig(id);
+    if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+    const md = generateDocs(config);
+    res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+    res.end(md);
+    return;
+  }
+
+  // ── TypeScript types ───────────────────────
+
+  if (method === 'GET' && sub === 'types') {
+    const config = await project.getServerConfig(id);
+    if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+    const ts = generateTypes(config);
+    res.writeHead(200, { 'Content-Type': 'text/typescript; charset=utf-8' });
+    res.end(ts);
+    return;
+  }
+
+  // ── Export config ──────────────────────────
+
+  if (method === 'GET' && sub === 'export') {
+    const config = await project.getServerConfig(id);
+    if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="${config.name.replace(/[^a-z0-9]/gi, '_')}.json"`,
+    });
+    res.end(JSON.stringify(config, null, 2));
+    return;
+  }
+
+  // ── Recordings ─────────────────────────────
+
+  const recordingMatch = sub.match(/^recordings(?:\/(\d+)\/promote)?$/);
+  if (recordingMatch) {
+    // GET /__api/servers/:id/recordings
+    if (method === 'GET' && !recordingMatch[1]) {
+      const recordings = await recorder.listRecordings(id);
+      sendJson(res, 200, recordings);
+      return;
+    }
+    // DELETE /__api/servers/:id/recordings
+    if (method === 'DELETE' && !recordingMatch[1]) {
+      await recorder.clearRecordings(id);
+      sendJson(res, 200, { cleared: true });
+      return;
+    }
+    // POST /__api/servers/:id/recordings/:idx/promote
+    if (method === 'POST' && recordingMatch[1]) {
+      const idx = parseInt(recordingMatch[1]);
+      const recordings = await recorder.listRecordings(id);
+      if (idx < 0 || idx >= recordings.length) { sendJson(res, 404, { error: 'Recording not found' }); return; }
+      const route = recorder.recordingToRoute(recordings[idx]);
+      const config = await project.getServerConfig(id);
+      if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+      config.routes = [...(config.routes ?? []), route];
+      await manager.reloadInstance(id, config);
+      sendJson(res, 201, route);
+      return;
+    }
   }
 
   // ── Per-server log SSE ──────────────────────

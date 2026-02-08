@@ -1,6 +1,7 @@
 import { createMockServer } from './server.js';
 import type { MockServer } from './server.js';
 import * as project from './project.js';
+import * as recorder from './recorder.js';
 import type { MockServerConfig, LogListener, LogEntry } from './types.js';
 
 // ── Instance registry ─────────────────────────────
@@ -44,6 +45,13 @@ export async function startInstance(id: string): Promise<MockServer> {
 
   // Forward logs to global listeners
   server.subscribeLog((entry) => emitGlobalLog(entry));
+
+  // Wire up proxy recording if proxyTarget is set
+  if (config.proxyTarget) {
+    server.onProxyResponse = (entry) => {
+      recorder.record(id, entry).catch(() => {});
+    };
+  }
 
   await server.start();
   instances.set(id, server);

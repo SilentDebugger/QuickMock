@@ -87,8 +87,18 @@ export interface MockServerConfig {
   resources: Record<string, ResourceConfig>;
   profiles: Record<string, Profile>;
   activeProfile?: string;
+  proxyTarget?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface RecordedResponse {
+  method: string;
+  path: string;
+  status: number;
+  responseHeaders?: Record<string, string>;
+  body?: string;
+  timestamp: number;
 }
 
 export interface Profile {
