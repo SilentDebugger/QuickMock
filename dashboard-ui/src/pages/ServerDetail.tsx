@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Square, Settings, ArrowLeft, Save } from 'lucide-react';
+import { Play, Square, ArrowLeft, Save, Download } from 'lucide-react';
 import { useServer, useStartServer, useStopServer, useUpdateServer } from '../hooks/useServers';
+import { docs } from '../lib/api';
 import { cn } from '../lib/utils';
 import RouteEditor from '../components/RouteEditor';
 import ResourceEditor from '../components/ResourceEditor';
@@ -43,6 +44,14 @@ export default function ServerDetail() {
             <span className="text-sm text-zinc-500 font-mono">:{config.port}</span>
           </div>
           <div className="flex items-center gap-2">
+            <a
+              href={docs.exportConfig(config.id)}
+              download
+              className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 text-sm rounded-md transition-colors"
+              title="Export config as JSON"
+            >
+              <Download className="w-3.5 h-3.5" /> Export
+            </a>
             {running ? (
               <button
                 onClick={() => stopServer.mutate(config.id)}

@@ -30,17 +30,50 @@ export interface ParseResult {
 
 // ── Helpers ───────────────────────────────────────
 
-/** Segment looks like a UUID or numeric ID. */
+/** Segment looks like a dynamic ID rather than a static resource name. */
 function isIdSegment(seg: string): boolean {
-  return /^\d+$/.test(seg) || /^[0-9a-f]{8,}$/i.test(seg) || /^[0-9a-f-]{36}$/i.test(seg);
+  if (/^\d+$/.test(seg)) return true;                       // numeric
+  if (/^[0-9a-f]{8,}$/i.test(seg)) return true;             // hex (mongo ObjectId, etc.)
+  if (/^[0-9a-f-]{36}$/i.test(seg)) return true;            // UUID
+  if (/^c[a-z0-9]{24}$/i.test(seg)) return true;            // CUID v1
+  if (/^[a-z0-9]{20,}$/i.test(seg)) return true;            // generic long alphanumeric (nanoid, ksuid, ulid, etc.)
+  if (/^[a-z]+_[a-z0-9_]{8,}$/i.test(seg)) return true;    // prefixed ID (exec_123_abc, usr_abcdef12)
+  return false;
 }
 
-/** Convert a concrete URL path to a parameterised pattern: /users/123 → /users/:id */
+/** Naive singularise: strip trailing 's' (or 'ies' → 'y', 'ses' → 's'). */
+function singularise(word: string): string {
+  if (word.endsWith('ies')) return word.slice(0, -3) + 'y';
+  if (word.endsWith('ses')) return word.slice(0, -2);
+  if (word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+  return word;
+}
+
+/**
+ * Convert a concrete URL path to a parameterised pattern with context-aware names.
+ * /jobs/abc123/executions/exec_456 → /jobs/:jobId/executions/:executionId
+ */
 function parameterise(pathname: string): string {
-  return pathname
-    .split('/')
-    .map(seg => (isIdSegment(seg) ? ':id' : seg))
-    .join('/');
+  const segments = pathname.split('/');
+  const result: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg && isIdSegment(seg)) {
+      // Use preceding segment to derive a meaningful param name
+      const prev = segments[i - 1];
+      if (prev && prev !== '' && !isIdSegment(prev)) {
+        const singular = singularise(prev);
+        // camelCase: first letter lowercase + "Id"
+        const paramName = singular.charAt(0).toLowerCase() + singular.slice(1) + 'Id';
+        result.push(':' + paramName);
+      } else {
+        result.push(':id');
+      }
+    } else {
+      result.push(seg);
+    }
+  }
+  return result.join('/');
 }
 
 /** Try to infer a faker template from a JSON value (for resource seed generation). */
@@ -179,8 +212,8 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
 
   for (const entry of filtered) {
     const paramPath = parameterise(entry.pathname);
-    // Derive base path (strip trailing /:id)
-    const basePath = paramPath.replace(/\/:id$/, '') || '/';
+    // Derive base path (strip trailing param like /:id, /:jobId, etc.)
+    const basePath = paramPath.replace(/\/:[a-zA-Z]+$/, '') || '/';
     const isDetail = paramPath !== basePath;
 
     if (!groups.has(basePath)) {
@@ -245,7 +278,7 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
     // Generate individual routes for non-resource entries
     for (const entry of group.entries) {
       // Skip if already covered by a resource
-      const entryBase = entry.paramPath.replace(/\/:id$/, '') || '/';
+      const entryBase = entry.paramPath.replace(/\/:[a-zA-Z]+$/, '') || '/';
       if (resourceBasePaths.has(entryBase)) continue;
 
       routes.push({

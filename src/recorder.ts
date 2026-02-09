@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { RecordedResponse, RouteConfig } from './types.js';
+import { parseHar, type ParseResult } from './schema/har.js';
 
 // ── Paths ─────────────────────────────────────────
 
@@ -55,6 +56,36 @@ export function recordingToRoute(entry: RecordedResponse): RouteConfig {
     response,
     headers: filterHeaders(entry.responseHeaders ?? {}),
   };
+}
+
+// ── Generate routes/resources from recordings ────
+
+/**
+ * Analyse all recordings and generate parameterised routes + CRUD resources.
+ * Converts recordings to HAR format and delegates to the HAR parser for
+ * grouping, CRUD detection, deduplication, and seed template inference.
+ */
+export function generateFromRecordings(recordings: RecordedResponse[]): ParseResult {
+  // Convert recordings into a minimal HAR structure that parseHar() accepts
+  const harEntries = recordings
+    .filter(r => r.status >= 200)
+    .map(r => ({
+      request: {
+        method: r.method,
+        // parseHar expects full URLs; use a dummy origin since paths are already relative
+        url: `http://localhost${r.path}`,
+      },
+      response: {
+        status: r.status,
+        content: {
+          mimeType: 'application/json',
+          text: r.body ?? '',
+        },
+      },
+    }));
+
+  const har = { log: { entries: harEntries } };
+  return parseHar(har);
 }
 
 // ── Helpers ───────────────────────────────────────

@@ -60,6 +60,7 @@ export const schema = {
   importSql:     (sql: string) => request<{ resources: Record<string, ResourceConfig> }>('/import/sql', { method: 'POST', body: JSON.stringify({ sql }) }),
   importOpenApi: (spec: string) => request<{ routes: unknown[]; resources: unknown[] }>('/import/openapi', { method: 'POST', body: spec, headers: { 'Content-Type': 'text/plain' } }),
   importHar:     (har: string, baseUrl?: string) => request<{ routes: unknown[]; resources: unknown[] }>('/import/har', { method: 'POST', body: JSON.stringify({ har, baseUrl }) }),
+  importConfig:  (config: Partial<MockServerConfig>) => request<MockServerConfig>('/import/config', { method: 'POST', body: JSON.stringify(config) }),
 };
 
 // ── Runtime overrides ─────────────────────────────
@@ -87,8 +88,16 @@ export const docs = {
 
 // ── Recordings ────────────────────────────────────
 
+export interface GenerateResult {
+  routes: { path: string; config: RouteConfig }[];
+  resources: { name: string; config: ResourceConfig }[];
+}
+
 export const recordings = {
-  list:    (serverId: string) => request<RecordedResponse[]>(`/servers/${serverId}/recordings`),
-  clear:   (serverId: string) => request<void>(`/servers/${serverId}/recordings`, { method: 'DELETE' }),
-  promote: (serverId: string, idx: number) => request<RouteConfig>(`/servers/${serverId}/recordings/${idx}/promote`, { method: 'POST' }),
+  list:     (serverId: string) => request<RecordedResponse[]>(`/servers/${serverId}/recordings`),
+  clear:    (serverId: string) => request<void>(`/servers/${serverId}/recordings`, { method: 'DELETE' }),
+  promote:  (serverId: string, idx: number) => request<RouteConfig>(`/servers/${serverId}/recordings/${idx}/promote`, { method: 'POST' }),
+  generate: (serverId: string) => request<GenerateResult>(`/servers/${serverId}/recordings/generate`, { method: 'POST' }),
+  apply:    (serverId: string, data: { routes: GenerateResult['routes']; resources: GenerateResult['resources']; target: 'same' | 'new'; name?: string; port?: number }) =>
+    request<MockServerConfig>(`/servers/${serverId}/recordings/apply`, { method: 'POST', body: JSON.stringify(data) }),
 };

@@ -167,6 +167,32 @@ async function handleApi(
     return;
   }
 
+  // POST /__api/import/config — import a shared QuickMock server config
+  if (method === 'POST' && pathname === '/__api/import/config') {
+    try {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : null) as Partial<MockServerConfig> | null;
+      if (!incoming) { sendJson(res, 400, { error: 'Request body must be a JSON object' }); return; }
+      // Create a new server from the imported config (fresh ID + timestamps)
+      const config = project.createDefaultConfig({
+        name: incoming.name ?? 'Imported Server',
+        description: incoming.description,
+        port: incoming.port ?? 0,
+        host: incoming.host,
+        cors: incoming.cors,
+        delay: incoming.delay,
+        routes: incoming.routes,
+        resources: incoming.resources,
+        profiles: incoming.profiles,
+        proxyTarget: incoming.proxyTarget,
+      });
+      const saved = await manager.createInstance(config);
+      sendJson(res, 201, saved);
+    } catch (err) {
+      sendJson(res, 400, { error: 'Failed to import config', message: (err as Error).message });
+    }
+    return;
+  }
+
   // ── Global log SSE ──────────────────────────
 
   if (method === 'GET' && pathname === '/__api/log') {
@@ -462,7 +488,7 @@ async function handleServerRoutes(
 
   // ── Recordings ─────────────────────────────
 
-  const recordingMatch = sub.match(/^recordings(?:\/(\d+)\/promote)?$/);
+  const recordingMatch = sub.match(/^recordings(?:\/(generate|apply|(\d+)\/promote))?$/);
   if (recordingMatch) {
     // GET /__api/servers/:id/recordings
     if (method === 'GET' && !recordingMatch[1]) {
@@ -476,9 +502,50 @@ async function handleServerRoutes(
       sendJson(res, 200, { cleared: true });
       return;
     }
+    // POST /__api/servers/:id/recordings/generate
+    if (method === 'POST' && recordingMatch[1] === 'generate') {
+      const recordings = await recorder.listRecordings(id);
+      if (recordings.length === 0) { sendJson(res, 400, { error: 'No recordings to generate from' }); return; }
+      const result = recorder.generateFromRecordings(recordings);
+      sendJson(res, 200, result);
+      return;
+    }
+    // POST /__api/servers/:id/recordings/apply
+    if (method === 'POST' && recordingMatch[1] === 'apply') {
+      const incoming = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+      const target = incoming.target as string ?? 'same';
+      const incomingRoutes = (incoming.routes ?? []) as { path: string; config: RouteConfig }[];
+      const incomingResources = (incoming.resources ?? []) as { name: string; config: ResourceConfig }[];
+
+      const routeConfigs: RouteConfig[] = incomingRoutes.map(r => r.config);
+      const resourceMap: Record<string, ResourceConfig> = {};
+      for (const r of incomingResources) resourceMap[r.name] = r.config;
+
+      if (target === 'new') {
+        // Create a new server with the generated config
+        const newConfig = project.createDefaultConfig({
+          name: incoming.name as string || 'Generated Mock',
+          port: incoming.port as number || 0,
+          routes: routeConfigs,
+          resources: resourceMap,
+          cors: true,
+        });
+        const saved = await manager.createInstance(newConfig);
+        sendJson(res, 201, saved);
+      } else {
+        // Merge into the existing server
+        const config = await project.getServerConfig(id);
+        if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+        config.routes = [...(config.routes ?? []), ...routeConfigs];
+        config.resources = { ...(config.resources ?? {}), ...resourceMap };
+        await manager.reloadInstance(id, config);
+        sendJson(res, 200, config);
+      }
+      return;
+    }
     // POST /__api/servers/:id/recordings/:idx/promote
-    if (method === 'POST' && recordingMatch[1]) {
-      const idx = parseInt(recordingMatch[1]);
+    if (method === 'POST' && recordingMatch[2]) {
+      const idx = parseInt(recordingMatch[2]);
       const recordings = await recorder.listRecordings(id);
       if (idx < 0 || idx >= recordings.length) { sendJson(res, 404, { error: 'Recording not found' }); return; }
       const route = recorder.recordingToRoute(recordings[idx]);

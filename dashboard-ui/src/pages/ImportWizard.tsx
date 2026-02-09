@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database, FileJson, Globe, ArrowRight, Check } from 'lucide-react';
+import { Database, FileJson, Globe, ArrowRight, Check, Upload } from 'lucide-react';
 import { schema, servers } from '../lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { cn, METHOD_BG } from '../lib/utils';
 import type { RouteConfig, ResourceConfig } from '../lib/types';
 
-type ImportType = 'sql' | 'openapi' | 'har' | null;
+type ImportType = 'sql' | 'openapi' | 'har' | 'config' | null;
 
 export default function ImportWizard() {
   const navigate = useNavigate();
@@ -63,6 +63,14 @@ export default function ImportWizard() {
         const result = await schema.importHar(input, baseUrl || undefined);
         processRoutesResult(result);
         if (!serverName) setServerName('har-mock');
+      } else if (type === 'config') {
+        const parsed = JSON.parse(input.trim());
+        const resources: Record<string, ResourceConfig> = parsed.resources ?? {};
+        const routes: RouteConfig[] = parsed.routes ?? [];
+        setPreviewResources(resources);
+        setPreviewRoutes(routes);
+        if (!serverName) setServerName(parsed.name ?? 'Imported Server');
+        if (parsed.port) setPort(parsed.port);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -98,11 +106,11 @@ export default function ImportWizard() {
   return (
     <div className="p-6 max-w-3xl">
       <h1 className="text-lg font-semibold mb-1">Import Schema</h1>
-      <p className="text-sm text-zinc-500 mb-6">Generate a mock API from a database schema, OpenAPI spec, or HAR recording.</p>
+      <p className="text-sm text-zinc-500 mb-6">Generate a mock API from a database schema, OpenAPI spec, HAR recording, or shared config.</p>
 
       {/* Step 1: Choose type */}
       {!type && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <button
             onClick={() => setType('sql')}
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-700 transition-colors text-left"
@@ -127,6 +135,14 @@ export default function ImportWizard() {
             <h3 className="font-medium mb-1">HAR File</h3>
             <p className="text-sm text-zinc-500">Paste a HAR recording from browser DevTools to generate routes from real traffic.</p>
           </button>
+          <button
+            onClick={() => setType('config')}
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-700 transition-colors text-left"
+          >
+            <Upload className="w-8 h-8 text-emerald-400 mb-3" />
+            <h3 className="font-medium mb-1">QuickMock Config</h3>
+            <p className="text-sm text-zinc-500">Paste an exported server config JSON to recreate a shared mock server.</p>
+          </button>
         </div>
       )}
 
@@ -137,7 +153,7 @@ export default function ImportWizard() {
             <button onClick={() => setType(null)} className="text-sm text-zinc-500 hover:text-zinc-300">&larr; Back</button>
             <span className="text-sm text-zinc-500">|</span>
             <span className="text-sm font-medium">
-              {type === 'sql' ? 'SQL Schema' : type === 'openapi' ? 'OpenAPI Spec' : 'HAR File'}
+              {type === 'sql' ? 'SQL Schema' : type === 'openapi' ? 'OpenAPI Spec' : type === 'har' ? 'HAR File' : 'QuickMock Config'}
             </span>
           </div>
 
@@ -162,6 +178,8 @@ export default function ImportWizard() {
               ? 'CREATE TABLE users (\n  id UUID PRIMARY KEY,\n  name VARCHAR(100) NOT NULL,\n  email VARCHAR(255) UNIQUE NOT NULL,\n  created_at TIMESTAMP DEFAULT NOW()\n);\n\nCREATE TABLE posts (\n  id SERIAL PRIMARY KEY,\n  title VARCHAR(200) NOT NULL,\n  body TEXT,\n  author_id UUID REFERENCES users(id),\n  published_at TIMESTAMP\n);'
               : type === 'openapi'
               ? 'openapi: 3.1.0\ninfo:\n  title: My API\n  version: 1.0.0\npaths:\n  /api/users:\n    get:\n      responses:\n        "200":\n          description: OK\n\n# Also accepts JSON format'
+              : type === 'config'
+              ? '{\n  "name": "My API Mock",\n  "port": 3001,\n  "routes": [...],\n  "resources": {...}\n}\n\nPaste the JSON exported from another QuickMock instance\n(use the Export button in a server\'s header).'
               : '{\n  "log": {\n    "entries": [\n      {\n        "request": { "method": "GET", "url": "https://api.example.com/users" },\n        "response": { "status": 200, "content": { "mimeType": "application/json", "text": "[...]" } }\n      }\n    ]\n  }\n}\n\nExport from browser DevTools → Network tab → right-click → Save all as HAR'}
             className="w-full px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg text-sm font-mono resize-y focus:outline-none focus:border-pink-500"
           />
