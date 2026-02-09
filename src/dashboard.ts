@@ -352,6 +352,21 @@ async function handleServerRoutes(
 
   // ── Profiles ────────────────────────────────
 
+  // POST /__api/servers/:id/profiles/deactivate — clear active profile
+  if (method === 'POST' && sub === 'profiles/deactivate') {
+    const config = await project.getServerConfig(id);
+    if (!config) { sendJson(res, 404, { error: 'Server not found' }); return; }
+    config.activeProfile = undefined;
+    const instance = manager.getInstance(id);
+    if (instance?.running) {
+      instance.routeOverrides.clear();
+      instance.resourceOverrides.clear();
+    }
+    await project.saveServerConfig(config);
+    sendJson(res, 200, { deactivated: true });
+    return;
+  }
+
   const profileMatch = sub.match(/^profiles(?:\/([^/]+))?(?:\/activate)?$/);
   if (profileMatch) {
     const config = await project.getServerConfig(id);

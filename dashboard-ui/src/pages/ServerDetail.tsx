@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Square, ArrowLeft, Save, Download } from 'lucide-react';
+import { Play, Square, ArrowLeft, Save, Download, HelpCircle, X } from 'lucide-react';
 import { useServer, useStartServer, useStopServer, useUpdateServer } from '../hooks/useServers';
 import { docs } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -15,6 +15,41 @@ import RecordingsViewer from '../components/RecordingsViewer';
 const TABS = ['Routes', 'Resources', 'Profiles', 'Try It', 'Logs', 'Docs', 'Recordings', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
 
+const TAB_HELP: Record<Tab, { title: string; description: string }> = {
+  Routes: {
+    title: 'Custom Routes',
+    description: 'Define static API endpoints with custom methods, paths, status codes, and response bodies. Supports {{faker.*}} templates for dynamic data, {{params.*}} / {{body.*}} / {{query.*}} for request context, multiple response variants, per-route delay, and error simulation.',
+  },
+  Resources: {
+    title: 'CRUD Resources',
+    description: 'Stateful collections with auto-generated REST endpoints (list, get, create, update, delete). Define a seed template with faker placeholders, set the item count, and configure relations between resources. Data persists in-memory and resets on server restart or POST /__reset.',
+  },
+  Profiles: {
+    title: 'Profiles',
+    description: 'Named configurations for switching API behaviors. Toggle individual routes and resources on/off, set per-endpoint delay and error rate overrides, then activate to apply instantly. Use for scenarios like "happy path", "slow network", or "partial outage".',
+  },
+  'Try It': {
+    title: 'Try It',
+    description: 'Built-in API client for testing your mock server. Send requests with custom methods, headers, and JSON bodies, and see the response status, timing, and body. URLs are pre-filled with the server base URL.',
+  },
+  Logs: {
+    title: 'Live Logs',
+    description: 'Real-time request log streamed via SSE. Shows method, path, status code, response time, and a proxy indicator for forwarded requests. Requires the server to be running. Auto-scrolls to latest entries.',
+  },
+  Docs: {
+    title: 'API Documentation',
+    description: 'Auto-generated Markdown docs listing all endpoints with methods, paths, status codes, and example curl commands. Also generates TypeScript interfaces inferred from your resource seed templates. Copy or download for your team.',
+  },
+  Recordings: {
+    title: 'Proxy Recordings',
+    description: 'When a proxy target is set, unmatched requests are forwarded to the real API and recorded here with full request/response data. Promote individual recordings to routes, or generate a complete mock config from all recordings with auto-detected CRUD resources and dynamic templates.',
+  },
+  Settings: {
+    title: 'Server Settings',
+    description: 'Configure server name, port, host, CORS, global response delay, and the proxy target URL. Changes are saved to disk and applied on next server start or reload.',
+  },
+};
+
 export default function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -23,6 +58,7 @@ export default function ServerDetail() {
   const stopServer = useStopServer();
   const updateServer = useUpdateServer();
   const [tab, setTab] = useState<Tab>('Routes');
+  const [showHelp, setShowHelp] = useState(false);
 
   if (isLoading) return <div className="p-6 text-zinc-500">Loading...</div>;
   if (!data) return <div className="p-6 text-zinc-500">Server not found</div>;
@@ -71,7 +107,7 @@ export default function ServerDetail() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1">
+        <div className="flex items-center gap-1">
           {TABS.map(t => (
             <button
               key={t}
@@ -84,6 +120,13 @@ export default function ServerDetail() {
               {t}
             </button>
           ))}
+          <button
+            onClick={() => setShowHelp(true)}
+            className="ml-1 p-1.5 text-zinc-600 hover:text-zinc-400 rounded-md transition-colors"
+            title="Tab guide"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -91,7 +134,7 @@ export default function ServerDetail() {
       <div className="flex-1 overflow-y-auto p-6">
         {tab === 'Routes' && <RouteEditor serverId={id!} routeList={config.routes ?? []} proxyTarget={config.proxyTarget} running={running} />}
         {tab === 'Resources' && <ResourceEditor serverId={id!} resourceMap={config.resources ?? {}} proxyTarget={config.proxyTarget} running={running} />}
-        {tab === 'Profiles' && <ProfileManager serverId={id!} profileMap={config.profiles ?? {}} activeProfile={config.activeProfile} />}
+        {tab === 'Profiles' && <ProfileManager serverId={id!} profileMap={config.profiles ?? {}} activeProfile={config.activeProfile} routes={config.routes ?? []} resources={config.resources ?? {}} />}
         {tab === 'Try It' && <TryItPanel defaultMethod="GET" defaultUrl={`${baseUrl}/`} baseUrl="" />}
         {tab === 'Logs' && (running
           ? <LogViewer url={`/__api/servers/${id}/log`} title={`${config.name} Log`} />
@@ -101,6 +144,45 @@ export default function ServerDetail() {
         {tab === 'Recordings' && <RecordingsViewer serverId={id!} />}
         {tab === 'Settings' && <ServerSettings config={config} onSave={(data) => updateServer.mutate({ id: id!, data })} />}
       </div>
+
+      {/* Help modal */}
+      {showHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowHelp(false)} />
+          <div className="relative w-full max-w-lg max-h-[80vh] overflow-y-auto bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl mx-4">
+            <div className="sticky top-0 flex items-center justify-between px-5 py-4 border-b border-zinc-800 bg-zinc-900 rounded-t-xl">
+              <h2 className="text-sm font-semibold text-zinc-200">Tab Guide</h2>
+              <button onClick={() => setShowHelp(false)} className="p-1 text-zinc-500 hover:text-zinc-300 rounded transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {TABS.map(t => {
+                const info = TAB_HELP[t];
+                return (
+                  <button
+                    key={t}
+                    onClick={() => { setTab(t); setShowHelp(false); }}
+                    className="w-full text-left group"
+                  >
+                    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-zinc-800/70 transition-colors">
+                      <span className={cn(
+                        'mt-0.5 shrink-0 px-2 py-0.5 rounded text-[10px] font-bold tracking-wide',
+                        tab === t ? 'bg-pink-500/20 text-pink-400' : 'bg-zinc-800 text-zinc-400 group-hover:text-zinc-300',
+                      )}>
+                        {t}
+                      </span>
+                      <p className="text-xs text-zinc-500 leading-relaxed group-hover:text-zinc-400 transition-colors">
+                        {info.description}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

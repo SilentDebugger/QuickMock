@@ -47,11 +47,12 @@ export const resources = {
 // ── Profiles ──────────────────────────────────────
 
 export const profiles = {
-  list:     (serverId: string) => request<{ profiles: Record<string, unknown>; activeProfile?: string }>(`/servers/${serverId}/profiles`),
-  create:   (serverId: string, name: string, description?: string) => request<void>(`/servers/${serverId}/profiles`, { method: 'POST', body: JSON.stringify({ name, description }) }),
-  update:   (serverId: string, name: string, data: unknown) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  delete:   (serverId: string, name: string) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-  activate: (serverId: string, name: string) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}/activate`, { method: 'POST' }),
+  list:       (serverId: string) => request<{ profiles: Record<string, unknown>; activeProfile?: string }>(`/servers/${serverId}/profiles`),
+  create:     (serverId: string, name: string, description?: string) => request<void>(`/servers/${serverId}/profiles`, { method: 'POST', body: JSON.stringify({ name, description }) }),
+  update:     (serverId: string, name: string, data: unknown) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete:     (serverId: string, name: string) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  activate:   (serverId: string, name: string) => request<void>(`/servers/${serverId}/profiles/${encodeURIComponent(name)}/activate`, { method: 'POST' }),
+  deactivate: (serverId: string) => request<void>(`/servers/${serverId}/profiles/deactivate`, { method: 'POST' }),
 };
 
 // ── Schema import ─────────────────────────────────
