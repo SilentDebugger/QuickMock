@@ -520,9 +520,11 @@ export function createManagementServer(port: number, host: string): http.Server 
     const pathname = new URL(req.url!, `http://${req.headers.host}`).pathname;
 
     // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    const requestedHeaders = req.headers['access-control-request-headers'];
+    res.setHeader('Access-Control-Allow-Headers', requestedHeaders || 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Max-Age', '86400');
     if (method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 

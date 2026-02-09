@@ -385,9 +385,11 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
     // CORS
     if (currentConfig.cors) {
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+      const requestedHeaders = req.headers['access-control-request-headers'];
+      res.setHeader('Access-Control-Allow-Headers', requestedHeaders || 'Content-Type,Authorization,X-Requested-With');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Max-Age', '86400');
       if (method === 'OPTIONS') {
         res.writeHead(204);
