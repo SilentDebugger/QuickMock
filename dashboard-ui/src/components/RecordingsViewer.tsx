@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Trash2, ArrowUpFromLine, RefreshCw, Sparkles, Plus, Server, Check } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Trash2, ArrowUpFromLine, RefreshCw, Sparkles, Plus, Server, Check, Lock, Search } from 'lucide-react';
 import { recordings, type GenerateResult } from '../lib/api';
 import type { RecordedResponse } from '../lib/types';
 import { cn, METHOD_BG } from '../lib/utils';
@@ -13,11 +13,26 @@ const METHOD_COLORS: Record<string, string> = {
   DELETE: 'text-red-400',
 };
 
+const METHODS = ['ALL', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+
+/** Headers that indicate authentication. */
+const AUTH_HEADERS = new Set(['authorization', 'x-api-key', 'cookie']);
+
+function hasAuth(rec: RecordedResponse): boolean {
+  if (!rec.requestHeaders) return false;
+  return Object.keys(rec.requestHeaders).some(k => AUTH_HEADERS.has(k.toLowerCase()));
+}
+
 export default function RecordingsViewer({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
   const [items, setItems] = useState<RecordedResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [detailTab, setDetailTab] = useState<'request' | 'response'>('response');
+
+  // Filters
+  const [methodFilter, setMethodFilter] = useState<string>('ALL');
+  const [pathSearch, setPathSearch] = useState('');
 
   // Generate flow state
   const [generating, setGenerating] = useState(false);
@@ -37,6 +52,14 @@ export default function RecordingsViewer({ serverId }: { serverId: string }) {
   }, [serverId]);
 
   useEffect(load, [load]);
+
+  const filtered = useMemo(() => {
+    return items.filter(rec => {
+      if (methodFilter !== 'ALL' && rec.method !== methodFilter) return false;
+      if (pathSearch && !rec.path.toLowerCase().includes(pathSearch.toLowerCase())) return false;
+      return true;
+    });
+  }, [items, methodFilter, pathSearch]);
 
   async function handleClear() {
     await recordings.clear(serverId);
@@ -249,56 +272,174 @@ export default function RecordingsViewer({ serverId }: { serverId: string }) {
         </div>
       </div>
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-2">
+        <select
+          value={methodFilter}
+          onChange={e => setMethodFilter(e.target.value)}
+          className="px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded-md text-sm text-zinc-300 focus:outline-none focus:border-pink-500 appearance-none cursor-pointer"
+        >
+          {METHODS.map(m => (
+            <option key={m} value={m}>{m === 'ALL' ? 'All methods' : m}</option>
+          ))}
+        </select>
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+          <input
+            value={pathSearch}
+            onChange={e => setPathSearch(e.target.value)}
+            placeholder="Filter by path..."
+            className="w-full pl-8 pr-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-md text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-pink-500"
+          />
+        </div>
+        {(methodFilter !== 'ALL' || pathSearch) && (
+          <span className="text-xs text-zinc-500">{filtered.length} match{filtered.length !== 1 ? 'es' : ''}</span>
+        )}
+      </div>
+
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       {/* List */}
       <div className="space-y-1">
-        {items.map((rec, idx) => (
-          <div key={idx} className="border border-zinc-800 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setExpanded(expanded === idx ? null : idx)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800/50 transition-colors"
-            >
-              <span className={cn('font-mono text-xs font-bold w-14', METHOD_COLORS[rec.method] ?? 'text-zinc-400')}>
-                {rec.method}
-              </span>
-              <span className="font-mono text-sm text-zinc-300 flex-1 truncate">{rec.path}</span>
-              <span className={cn(
-                'text-xs font-mono',
-                rec.status < 300 ? 'text-emerald-400' : rec.status < 400 ? 'text-amber-400' : 'text-red-400',
-              )}>
-                {rec.status}
-              </span>
-              <span className="text-xs text-zinc-600">{new Date(rec.timestamp).toLocaleTimeString()}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handlePromote(idx); }}
-                title="Save as route"
-                className="p-1 text-zinc-500 hover:text-pink-400 rounded transition-colors"
-              >
-                <ArrowUpFromLine className="w-3.5 h-3.5" />
-              </button>
-            </button>
+        {filtered.map((rec, idx) => {
+          // Find the original index in items for promoting
+          const originalIdx = items.indexOf(rec);
+          const isExpanded = expanded === originalIdx;
+          const authenticated = hasAuth(rec);
 
-            {expanded === idx && (
-              <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-900/50">
-                {rec.responseHeaders && Object.keys(rec.responseHeaders).length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Response Headers</div>
-                    <pre className="text-xs font-mono text-zinc-500 overflow-auto max-h-24">
-                      {Object.entries(rec.responseHeaders).map(([k, v]) => `${k}: ${v}`).join('\n')}
-                    </pre>
-                  </div>
+          return (
+            <div key={originalIdx} className="border border-zinc-800 rounded-lg overflow-hidden">
+              <button
+                onClick={() => { setExpanded(isExpanded ? null : originalIdx); setDetailTab('response'); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800/50 transition-colors"
+              >
+                <span className={cn('font-mono text-xs font-bold w-14', METHOD_COLORS[rec.method] ?? 'text-zinc-400')}>
+                  {rec.method}
+                </span>
+                <span className="font-mono text-sm text-zinc-300 flex-1 truncate">{rec.path}</span>
+                {authenticated && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400 text-[10px] font-medium">
+                    <Lock className="w-2.5 h-2.5" />
+                    Auth
+                  </span>
                 )}
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Response Body</div>
-                  <pre className="text-xs font-mono text-zinc-300 overflow-auto max-h-64 bg-zinc-900 rounded p-2">
-                    {rec.body ? tryFormatJson(rec.body) : '(empty)'}
-                  </pre>
+                <span className={cn(
+                  'text-xs font-mono',
+                  rec.status < 300 ? 'text-emerald-400' : rec.status < 400 ? 'text-amber-400' : 'text-red-400',
+                )}>
+                  {rec.status}
+                </span>
+                <span className="text-xs text-zinc-600">{new Date(rec.timestamp).toLocaleTimeString()}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handlePromote(originalIdx); }}
+                  title="Save as route"
+                  className="p-1 text-zinc-500 hover:text-pink-400 rounded transition-colors"
+                >
+                  <ArrowUpFromLine className="w-3.5 h-3.5" />
+                </button>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-zinc-800 bg-zinc-900/50">
+                  {/* Request / Response tabs */}
+                  <div className="flex border-b border-zinc-800">
+                    <button
+                      onClick={() => setDetailTab('request')}
+                      className={cn(
+                        'px-4 py-2 text-xs font-medium transition-colors',
+                        detailTab === 'request'
+                          ? 'text-pink-400 border-b-2 border-pink-400'
+                          : 'text-zinc-500 hover:text-zinc-300',
+                      )}
+                    >
+                      Request
+                    </button>
+                    <button
+                      onClick={() => setDetailTab('response')}
+                      className={cn(
+                        'px-4 py-2 text-xs font-medium transition-colors',
+                        detailTab === 'response'
+                          ? 'text-pink-400 border-b-2 border-pink-400'
+                          : 'text-zinc-500 hover:text-zinc-300',
+                      )}
+                    >
+                      Response
+                    </button>
+                  </div>
+
+                  <div className="px-4 py-3">
+                    {detailTab === 'request' ? (
+                      <RequestDetail rec={rec} />
+                    ) : (
+                      <ResponseDetail rec={rec} />
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Detail sub-components ─────────────────────────
+
+function RequestDetail({ rec }: { rec: RecordedResponse }) {
+  const headers = rec.requestHeaders ?? {};
+  const headerEntries = Object.entries(headers);
+
+  if (headerEntries.length === 0 && !rec.requestBody) {
+    return <div className="text-xs text-zinc-600">No request data recorded.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {headerEntries.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Request Headers</div>
+          <pre className="text-xs font-mono text-zinc-500 overflow-auto max-h-32 bg-zinc-900 rounded p-2">
+            {headerEntries.map(([k, v]) => {
+              const isAuth = AUTH_HEADERS.has(k.toLowerCase());
+              if (isAuth) {
+                // Mask the value, show only first 12 chars
+                const masked = v.length > 12 ? v.slice(0, 12) + '...' : v;
+                return `${k}: ${masked}  [AUTH]`;
+              }
+              return `${k}: ${v}`;
+            }).join('\n')}
+          </pre>
+        </div>
+      )}
+      {rec.requestBody && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Request Body</div>
+          <pre className="text-xs font-mono text-zinc-300 overflow-auto max-h-64 bg-zinc-900 rounded p-2">
+            {tryFormatJson(rec.requestBody)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResponseDetail({ rec }: { rec: RecordedResponse }) {
+  return (
+    <div className="space-y-3">
+      {rec.responseHeaders && Object.keys(rec.responseHeaders).length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Response Headers</div>
+          <pre className="text-xs font-mono text-zinc-500 overflow-auto max-h-24">
+            {Object.entries(rec.responseHeaders).map(([k, v]) => `${k}: ${v}`).join('\n')}
+          </pre>
+        </div>
+      )}
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Response Body</div>
+        <pre className="text-xs font-mono text-zinc-300 overflow-auto max-h-64 bg-zinc-900 rounded p-2">
+          {rec.body ? tryFormatJson(rec.body) : '(empty)'}
+        </pre>
       </div>
     </div>
   );

@@ -139,6 +139,34 @@ function unwrapSample(body: JsonValue): JsonValue | null {
   return null;
 }
 
+/** Keys that look server-generated (use faker, not body echo). */
+const SERVER_GENERATED_KEYS = new Set([
+  'id', 'created_at', 'createdat', 'updated_at', 'updatedat',
+  'created', 'updated', 'modified', 'timestamp',
+]);
+
+/**
+ * Build a dynamic response template for write routes.
+ * Keys present in both request and response → `{{body.key}}` (echo input).
+ * Keys only in response (server-generated) → `{{faker.*}}` via inferTemplate.
+ */
+function buildWriteTemplate(
+  reqBody: Record<string, JsonValue>,
+  resBody: Record<string, JsonValue>,
+): Record<string, JsonValue> {
+  const template: Record<string, JsonValue> = {};
+  for (const [key, val] of Object.entries(resBody)) {
+    if (SERVER_GENERATED_KEYS.has(key.toLowerCase())) {
+      template[key] = inferTemplate(val, key);
+    } else if (key in reqBody) {
+      template[key] = `{{body.${key}}}`;
+    } else {
+      template[key] = inferTemplate(val, key);
+    }
+  }
+  return template;
+}
+
 // ── Grouped entry tracking ───────────────────────
 
 interface PathGroup {
@@ -146,7 +174,7 @@ interface PathGroup {
   methods: Set<string>;
   hasSingleItem: boolean; // has /:id variant
   sampleResponse: JsonValue | null;
-  entries: { method: string; paramPath: string; status: number; response: JsonValue | null }[];
+  entries: { method: string; paramPath: string; status: number; response: JsonValue | null; requestBody: JsonValue | null }[];
 }
 
 // ── Main parser ──────────────────────────────────
@@ -172,7 +200,7 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
 
   // ── Step 1: Filter & normalise entries ─────────
 
-  const filtered: { method: string; pathname: string; status: number; body: JsonValue | null }[] = [];
+  const filtered: { method: string; pathname: string; status: number; body: JsonValue | null; requestBody: JsonValue | null }[] = [];
 
   for (const entry of har.log.entries) {
     const { request, response } = entry;
@@ -203,7 +231,13 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
       try { body = JSON.parse(response.content.text) as JsonValue; } catch { /* skip */ }
     }
 
-    filtered.push({ method: request.method.toUpperCase(), pathname, status: response.status, body });
+    // Parse request body (postData)
+    let requestBody: JsonValue | null = null;
+    if (request.postData?.text) {
+      try { requestBody = JSON.parse(request.postData.text) as JsonValue; } catch { /* skip */ }
+    }
+
+    filtered.push({ method: request.method.toUpperCase(), pathname, status: response.status, body, requestBody });
   }
 
   // ── Step 2: Group by parameterised path ────────
@@ -235,7 +269,7 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
       group.sampleResponse = entry.body;
     }
 
-    group.entries.push({ method: entry.method, paramPath, status: entry.status, response: entry.body });
+    group.entries.push({ method: entry.method, paramPath, status: entry.status, response: entry.body, requestBody: entry.requestBody });
   }
 
   // ── Step 3: Classify as resource or route ──────
@@ -281,13 +315,25 @@ export function parseHar(input: string | object, baseUrl?: string): ParseResult 
       const entryBase = entry.paramPath.replace(/\/:[a-zA-Z]+$/, '') || '/';
       if (resourceBasePaths.has(entryBase)) continue;
 
+      // For write methods with request body, build dynamic echo templates
+      let response: JsonValue | undefined = entry.response ?? undefined;
+      const isWrite = ['POST', 'PUT', 'PATCH'].includes(entry.method);
+      if (isWrite && entry.requestBody && response &&
+          typeof entry.requestBody === 'object' && !Array.isArray(entry.requestBody) &&
+          typeof response === 'object' && !Array.isArray(response)) {
+        response = buildWriteTemplate(
+          entry.requestBody as Record<string, JsonValue>,
+          response as Record<string, JsonValue>,
+        );
+      }
+
       routes.push({
         path: entry.paramPath,
         config: {
           method: entry.method,
           path: entry.paramPath,
           status: entry.status,
-          response: entry.response ?? undefined,
+          response,
         },
       });
     }

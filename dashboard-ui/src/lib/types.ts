@@ -28,6 +28,8 @@ export interface RecordedResponse {
   method: string;
   path: string;
   status: number;
+  requestHeaders?: Record<string, string>;
+  requestBody?: string;
   responseHeaders?: Record<string, string>;
   body?: string;
   timestamp: number;

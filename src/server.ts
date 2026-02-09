@@ -320,27 +320,34 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
   // ── Proxy helper ──────────────────────────────
 
+  /** Flatten incoming headers to a simple Record (skip hop-by-hop). */
+  function flattenRequestHeaders(raw: http.IncomingHttpHeaders): Record<string, string> {
+    const skip = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade']);
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!skip.has(k)) out[k] = Array.isArray(v) ? v.join(', ') : v ?? '';
+    }
+    return out;
+  }
+
   async function proxyRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     method: string,
     pathname: string,
+    fullPath: string,
     start: number,
   ): Promise<void> {
     const proxyTarget = currentConfig.proxyTarget!;
     try {
-      const targetUrl = proxyTarget.replace(/\/+$/, '') + pathname;
+      // Forward full path including query string to the real API
+      const targetUrl = proxyTarget.replace(/\/+$/, '') + fullPath;
       const reqBody = method !== 'GET' && method !== 'HEAD' ? await parseBody(req) : undefined;
 
+      const reqHeaders = flattenRequestHeaders(req.headers);
       const proxyRes = await fetch(targetUrl, {
         method,
-        headers: {
-          ...Object.fromEntries(
-            Object.entries(req.headers)
-              .filter(([k]) => !['host', 'connection'].includes(k))
-              .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v ?? '']),
-          ),
-        },
+        headers: reqHeaders,
         body: reqBody !== undefined && reqBody !== null ? JSON.stringify(reqBody) : undefined,
       });
 
@@ -351,11 +358,13 @@ export function createMockServer(config: MockServerConfig): MockServer {
       const respHeaders: Record<string, string> = {};
       proxyRes.headers.forEach((val, key) => { respHeaders[key] = val; });
 
-      // Record the response for later promotion
+      // Record the full request + response for later promotion
       onProxyResponse?.({
         method,
-        path: pathname,
+        path: fullPath,
         status: proxyStatus,
+        requestHeaders: reqHeaders,
+        requestBody: reqBody !== undefined && reqBody !== null ? JSON.stringify(reqBody) : undefined,
         responseHeaders: respHeaders,
         body: proxyBody,
         timestamp: Date.now(),
@@ -381,7 +390,9 @@ export function createMockServer(config: MockServerConfig): MockServer {
   async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const start = Date.now();
     const method = req.method!.toUpperCase();
-    const pathname = new URL(req.url!, `http://${req.headers.host}`).pathname;
+    const parsed = new URL(req.url!, `http://${req.headers.host}`);
+    const pathname = parsed.pathname;
+    const fullPath = parsed.pathname + (parsed.search || '');
 
     // CORS
     if (currentConfig.cors) {
@@ -425,7 +436,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
       // Passthrough: forward to proxy target instead of mocking
       if (override?.passthrough && currentConfig.proxyTarget) {
-        await proxyRequest(req, res, method, pathname, start);
+        await proxyRequest(req, res, method, pathname, fullPath, start);
         return;
       }
 
@@ -481,7 +492,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
       // Passthrough: forward to proxy target instead of mocking
       if (override?.passthrough && currentConfig.proxyTarget) {
-        await proxyRequest(req, res, method, pathname, start);
+        await proxyRequest(req, res, method, pathname, fullPath, start);
         return;
       }
 
@@ -513,7 +524,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
 
     // Proxy: forward unmatched requests to real API if proxyTarget is set
     if (currentConfig.proxyTarget) {
-      await proxyRequest(req, res, method, pathname, start);
+      await proxyRequest(req, res, method, pathname, fullPath, start);
       return;
     }
 
