@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Server, Upload } from 'lucide-react';
+import { Home, Server, Upload, Wand2 } from 'lucide-react';
 import { useServers } from '../hooks/useServers';
 import { cn } from '../lib/utils';
 
@@ -28,6 +28,17 @@ export default function Sidebar() {
         >
           <Home className="w-4 h-4" />
           Dashboard
+        </Link>
+
+        <Link
+          to="/scaffold"
+          className={cn(
+            'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+            pathname === '/scaffold' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
+          )}
+        >
+          <Wand2 className="w-4 h-4" />
+          Quick Start
         </Link>
 
         <Link

@@ -68,7 +68,49 @@ export function generateDocs(config: MockServerConfig): string {
       if (r.error) lines.push(`  **Error rate:** ${Math.round(r.error * 100)}%`);
       lines.push('');
 
-      if (r.response !== undefined && r.response !== null) {
+      // Sequence docs
+      if (r.sequence && r.sequence.length > 0) {
+        lines.push(`**Mode:** Sequence (${r.sequence.length} steps — each request advances to the next)`);
+        lines.push('');
+        for (let s = 0; s < r.sequence.length; s++) {
+          const step = r.sequence[s];
+          const tag = step.sticky ? ' (sticky)' : s === r.sequence.length - 1 ? ' (repeats)' : '';
+          lines.push(`**Step ${s + 1}${tag}:** status ${step.status ?? r.status ?? 200}${step.delay ? `, delay ${step.delay}ms` : ''}`);
+          if (step.response !== undefined && step.response !== null) {
+            lines.push('');
+            lines.push('```json');
+            lines.push(JSON.stringify(step.response, null, 2));
+            lines.push('```');
+          }
+          lines.push('');
+        }
+      }
+
+      // Rules docs
+      else if (r.rules && r.rules.length > 0) {
+        lines.push(`**Mode:** Conditional (${r.rules.length} rules — first matching rule wins)`);
+        lines.push('');
+        for (let ri = 0; ri < r.rules.length; ri++) {
+          const rule = r.rules[ri];
+          const hasConditions = rule.when && Object.keys(rule.when).length > 0;
+          if (hasConditions) {
+            const conds = Object.entries(rule.when!).map(([k, v]) => `\`${k}\` = \`${v}\``).join(' AND ');
+            lines.push(`**Rule ${ri + 1}:** When ${conds} → status ${rule.status ?? r.status ?? 200}`);
+          } else {
+            lines.push(`**Default:** status ${rule.status ?? r.status ?? 200}`);
+          }
+          if (rule.response !== undefined && rule.response !== null) {
+            lines.push('');
+            lines.push('```json');
+            lines.push(JSON.stringify(rule.response, null, 2));
+            lines.push('```');
+          }
+          lines.push('');
+        }
+      }
+
+      // Single response docs
+      else if (r.response !== undefined && r.response !== null) {
         lines.push('**Response:**');
         lines.push('');
         lines.push('```json');
@@ -188,11 +230,15 @@ function collectEndpoints(config: MockServerConfig): EndpointSummary[] {
   const eps: EndpointSummary[] = [];
 
   for (const r of config.routes ?? []) {
+    let description = 'Static route';
+    if (r.rules?.length)          description = `${r.rules.length} conditional rules`;
+    else if (r.sequence?.length)  description = `${r.sequence.length}-step sequence`;
+    else if (r.responses?.length) description = `${r.responses.length} response variants`;
     eps.push({
       method: (r.method ?? 'GET').toUpperCase(),
       path: r.path,
       status: r.status ?? 200,
-      description: r.responses?.length ? `${r.responses.length} response variants` : 'Static route',
+      description,
     });
   }
 

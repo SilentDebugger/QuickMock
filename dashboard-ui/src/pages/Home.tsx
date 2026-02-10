@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, Square, Trash2, Server } from 'lucide-react';
+import { Plus, Play, Square, Trash2, Server, Wand2 } from 'lucide-react';
 import { useServers, useCreateServer, useStartServer, useStopServer, useDeleteServer } from '../hooks/useServers';
 import { cn, METHOD_BG } from '../lib/utils';
 import LogViewer from '../components/LogViewer';
@@ -28,13 +28,22 @@ export default function Home() {
           <h1 className="text-lg font-semibold">Mock Servers</h1>
           <p className="text-sm text-zinc-500 mt-0.5">Create and manage your mock API servers</p>
         </div>
-        <button
-          onClick={handleCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          New Server
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/scaffold')}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium rounded-lg transition-colors"
+          >
+            <Wand2 className="w-4 h-4" />
+            Quick Start
+          </button>
+          <button
+            onClick={handleCreate}
+            className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            New Server
+          </button>
+        </div>
       </div>
 
       {/* Grid */}
@@ -45,14 +54,23 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center h-64 text-center">
             <Server className="w-12 h-12 text-zinc-700 mb-4" />
             <p className="text-zinc-400 mb-2">No mock servers yet</p>
-            <p className="text-sm text-zinc-600 mb-4">Create a server or import from a schema to get started.</p>
-            <button
-              onClick={handleCreate}
-              className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Create Server
-            </button>
+            <p className="text-sm text-zinc-600 mb-5">Describe your data model or create a blank server to get started.</p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate('/scaffold')}
+                className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                <Wand2 className="w-4 h-4" />
+                Quick Start
+              </button>
+              <button
+                onClick={handleCreate}
+                className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Blank Server
+              </button>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

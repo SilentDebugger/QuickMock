@@ -18,6 +18,7 @@ src/template.ts         → Template engine, fake data generators
 src/watcher.ts          → File watching with debounced reload
 src/types.ts            → Shared type definitions
 dashboard-ui/           → React + Vite + Tailwind CSS frontend (builds to dist/)
+dashboard-ui/src/lib/scaffold.ts → Client-side data model parser for Quick Start wizard
 routes.json             → User-defined route/resource config (legacy mode)
 .quickmock/             → Persistent server configs (management mode)
 ```
@@ -77,7 +78,7 @@ Dev: `src/dashboard` is a symlink to `dashboard-ui/dist/` for tsx dev mode.
 
 **watcher** — Utility. Watches a file for changes, debounces rapid events, recovers from temporary file deletions.
 
-**types** — Shared type definitions: `Route`, `RouteConfig`, `ResourceConfig`, `ResourceEntry`, `MockServerConfig`, `Profile`, `RuntimeOverride`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`, `LogEntry`, `LogListener`.
+**types** — Shared type definitions: `Route`, `RouteConfig`, `ResourceConfig`, `ResourceEntry`, `MockServerConfig`, `Profile`, `RuntimeOverride`, `SequenceStep`, `RouteRule`, `ServerOptions`, `TemplateContext`, `JsonValue`, `JsonRecord`, `LogEntry`, `LogListener`.
 
 ## Management API
 
@@ -129,15 +130,22 @@ interface Profile {
 
 ## Route & Resource Schemas
 
-Unchanged from v1 — see `routes.json` format and `{{faker.*}}` template syntax.
+Routes support four response modes (priority order):
+1. **Rules** (`rules: RouteRule[]`) — first matching rule wins, condition-based on `query.*`, `params.*`, `headers.*`, `body.*`
+2. **Sequence** (`sequence: SequenceStep[]`) — each request advances to the next step; last step repeats; `sticky` stops advancement
+3. **Variants** (`responses: JsonValue[]`) — random pick from list
+4. **Single** (`response: JsonValue`) — static response
+
+See `routes.json` format and `{{faker.*}}` template syntax.
 
 ## Request Flow (per mock server instance)
 
 1. CORS headers (if enabled)
-2. `POST /__reset` → re-seed all store collections
-3. Match custom routes → check overrides (disabled → 503, delay, error) → template response
+2. `POST /__reset` → re-seed all store collections + reset sequence counters
+3. Match custom routes → check overrides (disabled → 503, passthrough) → parse body → resolve response (rules > sequence > variants > single) → delay → error simulation → template → respond
 4. Match resource routes → check overrides → store CRUD
-5. 404
+5. Proxy to target (if configured)
+6. 404
 
 ## Principles
 

@@ -8,7 +8,7 @@ import { createStore } from './store.js';
 import type { Store } from './store.js';
 import type {
   Route, RouteConfig, ResourceConfig, ResourceEntry, RoutesFileConfig,
-  MockServerConfig, ServerOptions, TemplateContext,
+  MockServerConfig, ServerOptions, TemplateContext, RouteRule,
   JsonValue, JsonRecord, LogEntry, LogListener, RuntimeOverride, RecordedResponse,
 } from './types.js';
 
@@ -78,7 +78,32 @@ function parseRouteConfigs(raw: RouteConfig[]): Route[] {
     delay:       r.delay,
     error:       r.error,
     errorStatus: r.errorStatus,
+    sequence:    r.sequence,
+    rules:       r.rules,
   }));
+}
+
+/** Match a rule's conditions against the request context. */
+function matchRuleConditions(rule: RouteRule, ctx: TemplateContext): boolean {
+  if (!rule.when || Object.keys(rule.when).length === 0) return true; // no conditions = default/fallback
+  for (const [path, expected] of Object.entries(rule.when)) {
+    const dotIdx = path.indexOf('.');
+    if (dotIdx === -1) return false;
+    const source = path.slice(0, dotIdx);
+    const key = path.slice(dotIdx + 1);
+    let actual: string | undefined;
+    if (source === 'query')        actual = ctx.query[key];
+    else if (source === 'params')  actual = ctx.params[key];
+    else if (source === 'headers') actual = String(ctx.headers[key.toLowerCase()] ?? '');
+    else if (source === 'body') {
+      const body = ctx.body;
+      if (body && typeof body === 'object' && !Array.isArray(body)) {
+        actual = String((body as Record<string, unknown>)[key] ?? '');
+      }
+    }
+    if (actual === undefined || actual !== expected) return false;
+  }
+  return true;
 }
 
 /**
@@ -195,6 +220,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
   const store: Store = createStore();
   const routeOverrides    = new Map<number, RuntimeOverride>();
   const resourceOverrides = new Map<string, RuntimeOverride>();
+  const sequenceCounters  = new Map<number, number>();
   const logListeners      = new Set<LogListener>();
   let httpServer: http.Server | null = null;
   let _running = false;
@@ -207,6 +233,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
     currentConfig = cfg;
     routes = parseRouteConfigs(cfg.routes ?? []);
     resources = seedResources(cfg.resources ?? {}, store);
+    sequenceCounters.clear();
   }
 
   // ── Route matching ────────────────────────────
@@ -413,8 +440,9 @@ export function createMockServer(config: MockServerConfig): MockServer {
     // Reset endpoint
     if (method === 'POST' && pathname === '/__reset') {
       store.reset();
+      sequenceCounters.clear();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: 'All collections re-seeded' }));
+      res.end(JSON.stringify({ message: 'All collections re-seeded, sequences reset' }));
       logRequest(method, pathname, 200, Date.now() - start);
       return;
     }
@@ -440,9 +468,49 @@ export function createMockServer(config: MockServerConfig): MockServer {
         return;
       }
 
-      const delay = override?.delay ?? route.delay ?? currentConfig.delay ?? 0;
+      // Parse request data first (needed for rules evaluation and templates)
+      const reqBody = await parseBody(req);
+      const query   = parseQuery(req.url!);
+      const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
+
+      // Resolve response: rules > sequence > variants > single
+      let responseData: JsonValue | undefined;
+      let resolvedStatus = route.status || 200;
+      let resolvedDelay  = route.delay;
+      let resolvedHeaders: Record<string, string> = { ...route.headers };
+
+      if (route.rules && route.rules.length > 0) {
+        const matched = route.rules.find(rule => matchRuleConditions(rule, ctx));
+        if (matched) {
+          responseData = matched.response;
+          if (matched.status) resolvedStatus = matched.status;
+          if (matched.delay !== undefined) resolvedDelay = matched.delay;
+          if (matched.headers) resolvedHeaders = { ...resolvedHeaders, ...matched.headers };
+        } else {
+          responseData = route.response;
+        }
+      } else if (route.sequence && route.sequence.length > 0) {
+        const counter = sequenceCounters.get(routeIdx) ?? 0;
+        const stepIdx = Math.min(counter, route.sequence.length - 1);
+        const step    = route.sequence[stepIdx];
+        responseData  = step.response;
+        if (step.status) resolvedStatus = step.status;
+        if (step.delay !== undefined) resolvedDelay = step.delay;
+        if (step.headers) resolvedHeaders = { ...resolvedHeaders, ...step.headers };
+        if (stepIdx < route.sequence.length - 1 && !step.sticky) {
+          sequenceCounters.set(routeIdx, counter + 1);
+        }
+      } else if (route.responses && route.responses.length > 0) {
+        responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
+      } else {
+        responseData = route.response;
+      }
+
+      // Apply delay (override > step/rule > route > global)
+      const delay = override?.delay ?? resolvedDelay ?? currentConfig.delay ?? 0;
       if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay));
 
+      // Error simulation
       const errorRate = override?.error ?? route.error ?? 0;
       if (errorRate > 0 && Math.random() < errorRate) {
         const errStatus = route.errorStatus || 500;
@@ -452,27 +520,19 @@ export function createMockServer(config: MockServerConfig): MockServer {
         return;
       }
 
-      const reqBody = await parseBody(req);
-      const query   = parseQuery(req.url!);
-      const ctx: TemplateContext = { params, body: reqBody, query, headers: req.headers };
-
-      let responseData: JsonValue | undefined = route.response;
-      if (route.responses && route.responses.length > 0) {
-        responseData = route.responses[Math.floor(Math.random() * route.responses.length)];
-      }
+      // Process templates
       if (responseData !== undefined && responseData !== null) {
         responseData = processTemplate(responseData, ctx);
       }
 
-      const status  = route.status || 200;
-      const headers = { 'Content-Type': 'application/json', ...route.headers };
-      res.writeHead(status, headers);
+      const headers = { 'Content-Type': 'application/json', ...resolvedHeaders };
+      res.writeHead(resolvedStatus, headers);
       if (responseData !== undefined && responseData !== null) {
         res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
       } else {
         res.end();
       }
-      logRequest(method, pathname, status, Date.now() - start);
+      logRequest(method, pathname, resolvedStatus, Date.now() - start);
       return;
     }
 
@@ -574,6 +634,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
     applyConfig(newConfig);
     routeOverrides.clear();
     resourceOverrides.clear();
+    sequenceCounters.clear();
   }
 
   return {

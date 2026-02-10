@@ -35,6 +35,22 @@ export interface RecordedResponse {
   timestamp: number;
 }
 
+export interface SequenceStep {
+  status?: number;
+  response?: unknown;
+  delay?: number;
+  headers?: Record<string, string>;
+  sticky?: boolean;
+}
+
+export interface RouteRule {
+  when?: Record<string, string>;
+  status?: number;
+  response?: unknown;
+  delay?: number;
+  headers?: Record<string, string>;
+}
+
 export interface RouteConfig {
   method?: string;
   path: string;
@@ -45,6 +61,8 @@ export interface RouteConfig {
   delay?: number;
   error?: number;
   errorStatus?: number;
+  sequence?: SequenceStep[];
+  rules?: RouteRule[];
 }
 
 export interface RelationConfig {
