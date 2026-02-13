@@ -1,18 +1,19 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Plus, Trash2, Save, Link, ArrowUpRight } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { resources, overrides } from '../lib/api';
 import { cn } from '../lib/utils';
-import type { ResourceConfig, RelationConfig } from '../lib/types';
+import type { ResourceConfig, RelationConfig, RuntimeOverride } from '../lib/types';
 
 interface Props {
   serverId: string;
   resourceMap: Record<string, ResourceConfig>;
   proxyTarget?: string;
   running?: boolean;
+  resourceOverrides?: Record<string, RuntimeOverride>;
 }
 
-export default function ResourceEditor({ serverId, resourceMap, proxyTarget, running }: Props) {
+export default function ResourceEditor({ serverId, resourceMap, proxyTarget, running, resourceOverrides }: Props) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<string | 'new' | null>(null);
   const [name, setName] = useState('');
@@ -33,16 +34,27 @@ export default function ResourceEditor({ serverId, resourceMap, proxyTarget, run
     onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', serverId] }),
   });
 
-  // Track passthrough state per resource name
-  const [passthroughs, setPassthroughs] = useState<Record<string, boolean>>({});
+  // Initialize passthrough state from server's runtime overrides
+  const serverPassthroughs = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    if (resourceOverrides) {
+      for (const [name, ov] of Object.entries(resourceOverrides)) {
+        if (ov.passthrough) map[name] = true;
+      }
+    }
+    return map;
+  }, [resourceOverrides]);
+
+  const [localOverrides, setLocalOverrides] = useState<Record<string, boolean>>({});
+  const passthroughs = useMemo(() => ({ ...serverPassthroughs, ...localOverrides }), [serverPassthroughs, localOverrides]);
 
   const togglePassthrough = async (resName: string) => {
     const next = !passthroughs[resName];
-    setPassthroughs(prev => ({ ...prev, [resName]: next }));
+    setLocalOverrides(prev => ({ ...prev, [resName]: next }));
     try {
       await overrides.patchResource(serverId, resName, { passthrough: next });
     } catch {
-      setPassthroughs(prev => ({ ...prev, [resName]: !next }));
+      setLocalOverrides(prev => ({ ...prev, [resName]: !next }));
     }
   };
 

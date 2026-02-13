@@ -184,6 +184,7 @@ async function handleApi(
         resources: incoming.resources,
         profiles: incoming.profiles,
         proxyTarget: incoming.proxyTarget,
+        proxyHeaders: incoming.proxyHeaders,
       });
       const saved = await manager.createInstance(config);
       sendJson(res, 201, saved);
@@ -235,6 +236,12 @@ async function handleServerRoutes(
       resourceCount: Object.keys(config.resources ?? {}).length,
       resourceItems: instance?.running
         ? Object.fromEntries(instance.getResources().map(r => [r.name, instance.getStore().list(r.name).total]))
+        : {},
+      routeOverrides: instance?.running
+        ? Object.fromEntries(instance.routeOverrides)
+        : {},
+      resourceOverrides: instance?.running
+        ? Object.fromEntries(instance.resourceOverrides)
         : {},
     });
     return;
@@ -503,7 +510,7 @@ async function handleServerRoutes(
 
   // ── Recordings ─────────────────────────────
 
-  const recordingMatch = sub.match(/^recordings(?:\/(generate|apply|(\d+)\/promote))?$/);
+  const recordingMatch = sub.match(/^recordings(?:\/(generate|apply|import|(\d+)\/promote))?$/);
   if (recordingMatch) {
     // GET /__api/servers/:id/recordings
     if (method === 'GET' && !recordingMatch[1]) {
@@ -556,6 +563,18 @@ async function handleServerRoutes(
         await manager.reloadInstance(id, config);
         sendJson(res, 200, config);
       }
+      return;
+    }
+    // POST /__api/servers/:id/recordings/import — bulk import recordings
+    if (method === 'POST' && recordingMatch[1] === 'import') {
+      const incoming = (body && typeof body === 'object' ? body : null);
+      const entries = Array.isArray(incoming) ? incoming : (incoming as Record<string, unknown>)?.recordings;
+      if (!Array.isArray(entries) || entries.length === 0) {
+        sendJson(res, 400, { error: 'Expected a non-empty array of recordings' });
+        return;
+      }
+      const count = await recorder.importRecordings(id, entries);
+      sendJson(res, 200, { imported: count });
       return;
     }
     // POST /__api/servers/:id/recordings/:idx/promote

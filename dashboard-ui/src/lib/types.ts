@@ -20,6 +20,7 @@ export interface MockServerConfig {
   profiles: Record<string, Profile>;
   activeProfile?: string;
   proxyTarget?: string;
+  proxyHeaders?: Record<string, string>;
   createdAt: number;
   updatedAt: number;
 }
@@ -115,4 +116,6 @@ export interface ServerDetail {
   routeCount: number;
   resourceCount: number;
   resourceItems: Record<string, number>;
+  routeOverrides?: Record<number, RuntimeOverride>;
+  resourceOverrides?: Record<string, RuntimeOverride>;
 }

@@ -19,10 +19,15 @@ export async function listServerConfigs(): Promise<MockServerConfig[]> {
   const files = await fs.readdir(SERVERS_DIR);
   const configs: MockServerConfig[] = [];
   for (const file of files) {
-    if (!file.endsWith('.json')) continue;
+    // Only match server config files (UUID.json), skip recordings (UUID.recordings.json)
+    if (!file.endsWith('.json') || file.includes('.recordings.')) continue;
     try {
       const content = await fs.readFile(path.join(SERVERS_DIR, file), 'utf-8');
-      configs.push(JSON.parse(content) as MockServerConfig);
+      const parsed = JSON.parse(content);
+      // Sanity check: must be an object with an id field
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.id) {
+        configs.push(parsed as MockServerConfig);
+      }
     } catch { /* skip corrupt files */ }
   }
   return configs.sort((a, b) => b.updatedAt - a.updatedAt);

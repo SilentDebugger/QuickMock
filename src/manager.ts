@@ -2,7 +2,25 @@ import { createMockServer } from './server.js';
 import type { MockServer } from './server.js';
 import * as project from './project.js';
 import * as recorder from './recorder.js';
-import type { MockServerConfig, LogListener, LogEntry } from './types.js';
+import type { MockServerConfig, LogListener, LogEntry, RecordedResponse } from './types.js';
+
+/** Header names that carry authentication context. */
+const AUTH_HEADER_NAMES = new Set(['authorization', 'cookie', 'x-api-key']);
+
+/** Extract auth-related headers from the most recent recording that has them. */
+function extractAuthHeaders(recordings: RecordedResponse[]): Record<string, string> {
+  // Walk newest-first
+  for (let i = recordings.length - 1; i >= 0; i--) {
+    const h = recordings[i].requestHeaders;
+    if (!h) continue;
+    const auth: Record<string, string> = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (AUTH_HEADER_NAMES.has(k.toLowerCase())) auth[k] = v;
+    }
+    if (Object.keys(auth).length > 0) return auth;
+  }
+  return {};
+}
 
 // ── Instance registry ─────────────────────────────
 
@@ -50,7 +68,18 @@ export async function startInstance(id: string): Promise<MockServer> {
   if (config.proxyTarget) {
     server.onProxyResponse = (entry) => {
       recorder.record(id, entry).catch(() => {});
+      // Update auth headers from fresh proxy responses
+      const fresh = extractAuthHeaders([entry]);
+      if (Object.keys(fresh).length > 0) {
+        server.proxyAuthHeaders = { ...server.proxyAuthHeaders, ...fresh };
+      }
     };
+
+    // Pre-populate auth headers from existing recordings
+    const recordings = await recorder.listRecordings(id);
+    if (recordings.length > 0) {
+      server.proxyAuthHeaders = extractAuthHeaders(recordings);
+    }
   }
 
   await server.start();

@@ -132,10 +132,10 @@ export default function ServerDetail() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'Routes' && <RouteEditor serverId={id!} routeList={config.routes ?? []} proxyTarget={config.proxyTarget} running={running} />}
-        {tab === 'Resources' && <ResourceEditor serverId={id!} resourceMap={config.resources ?? {}} proxyTarget={config.proxyTarget} running={running} />}
+        {tab === 'Routes' && <RouteEditor serverId={id!} routeList={config.routes ?? []} proxyTarget={config.proxyTarget} running={running} routeOverrides={data.routeOverrides} />}
+        {tab === 'Resources' && <ResourceEditor serverId={id!} resourceMap={config.resources ?? {}} proxyTarget={config.proxyTarget} running={running} resourceOverrides={data.resourceOverrides} />}
         {tab === 'Profiles' && <ProfileManager serverId={id!} profileMap={config.profiles ?? {}} activeProfile={config.activeProfile} routes={config.routes ?? []} resources={config.resources ?? {}} />}
-        {tab === 'Try It' && <TryItPanel defaultMethod="GET" defaultUrl={`${baseUrl}/`} baseUrl="" />}
+        {tab === 'Try It' && <TryItPanel defaultMethod="GET" defaultUrl={`${baseUrl}/`} baseUrl="" serverId={id} />}
         {tab === 'Logs' && (running
           ? <LogViewer url={`/__api/servers/${id}/log`} title={`${config.name} Log`} />
           : <div className="text-sm text-zinc-500 text-center py-8">Start the server to see live logs.</div>
@@ -195,6 +195,11 @@ function ServerSettings({ config, onSave }: { config: import('../lib/types').Moc
   const [cors, setCors] = useState(config.cors);
   const [delay, setDelay] = useState(config.delay);
   const [proxyTarget, setProxyTarget] = useState(config.proxyTarget ?? '');
+  const [proxyHeadersText, setProxyHeadersText] = useState(
+    config.proxyHeaders && Object.keys(config.proxyHeaders).length > 0
+      ? JSON.stringify(config.proxyHeaders, null, 2)
+      : '',
+  );
 
   return (
     <div className="max-w-lg space-y-4">
@@ -246,8 +251,30 @@ function ServerSettings({ config, onSave }: { config: import('../lib/types').Moc
         <p className="text-[10px] text-zinc-600 mt-1">When set, unmatched requests are proxied to this URL and recorded.</p>
       </div>
 
+      {/* Proxy Headers */}
+      {proxyTarget && (
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Proxy Headers (JSON)</label>
+          <textarea
+            value={proxyHeadersText}
+            onChange={e => setProxyHeadersText(e.target.value)}
+            rows={3}
+            spellCheck={false}
+            placeholder={'{\n  "Authorization": "Bearer your-token-here"\n}'}
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-xs font-mono resize-y focus:outline-none focus:border-pink-500 placeholder:text-zinc-600"
+          />
+          <p className="text-[10px] text-zinc-600 mt-1">Extra headers injected into every proxy request (auth tokens, API keys, etc).</p>
+        </div>
+      )}
+
       <button
-        onClick={() => onSave({ name, description, port, host, cors, delay, proxyTarget: proxyTarget || undefined })}
+        onClick={() => {
+          let proxyHeaders: Record<string, string> | undefined;
+          if (proxyHeadersText.trim()) {
+            try { proxyHeaders = JSON.parse(proxyHeadersText); } catch { /* keep undefined */ }
+          }
+          onSave({ name, description, port, host, cors, delay, proxyTarget: proxyTarget || undefined, proxyHeaders });
+        }}
         className="flex items-center gap-2 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium rounded-md transition-colors"
       >
         <Save className="w-4 h-4" /> Save Settings

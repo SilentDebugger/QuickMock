@@ -116,6 +116,7 @@ export interface MockServerConfig {
   profiles: Record<string, Profile>;
   activeProfile?: string;
   proxyTarget?: string;
+  proxyHeaders?: Record<string, string>;
   createdAt: number;
   updatedAt: number;
 }

@@ -205,6 +205,7 @@ export interface MockServer {
   getConfig(): MockServerConfig;
   routeOverrides: Map<number, RuntimeOverride>;
   resourceOverrides: Map<string, RuntimeOverride>;
+  proxyAuthHeaders: Record<string, string>;
   subscribeLog(listener: LogListener): () => void;
   onProxyResponse: ((entry: RecordedResponse) => void) | null;
   readonly running: boolean;
@@ -226,6 +227,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
   let _running = false;
   let currentConfig = config;
   let onProxyResponse: ((entry: RecordedResponse) => void) | null = null;
+  let proxyAuthHeaders: Record<string, string> = {};
 
   // ── Apply config ──────────────────────────────
 
@@ -372,6 +374,16 @@ export function createMockServer(config: MockServerConfig): MockServer {
       const reqBody = method !== 'GET' && method !== 'HEAD' ? await parseBody(req) : undefined;
 
       const reqHeaders = flattenRequestHeaders(req.headers);
+      // Layer auth: recorded headers (auto-extracted) → config proxyHeaders (manual) → incoming request headers
+      // Recorded auth fills in missing auth; config overrides everything; incoming request wins for non-auth
+      if (Object.keys(proxyAuthHeaders).length > 0) {
+        for (const [k, v] of Object.entries(proxyAuthHeaders)) {
+          if (!reqHeaders[k]) reqHeaders[k] = v;
+        }
+      }
+      if (currentConfig.proxyHeaders) {
+        Object.assign(reqHeaders, currentConfig.proxyHeaders);
+      }
       const proxyRes = await fetch(targetUrl, {
         method,
         headers: reqHeaders,
@@ -402,6 +414,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
       delete outHeaders['transfer-encoding'];
       delete outHeaders['content-encoding'];
       delete outHeaders['content-length'];
+      outHeaders['x-quickmock-source'] = 'proxy';
       res.writeHead(proxyStatus, outHeaders);
       res.end(proxyBody);
       logRequest(method, pathname, proxyStatus, Date.now() - start, true);
@@ -421,6 +434,10 @@ export function createMockServer(config: MockServerConfig): MockServer {
     const pathname = parsed.pathname;
     const fullPath = parsed.pathname + (parsed.search || '');
 
+    // Prevent browser caching of any mock response
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+
     // CORS
     if (currentConfig.cors) {
       res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
@@ -428,6 +445,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
       const requestedHeaders = req.headers['access-control-request-headers'];
       res.setHeader('Access-Control-Allow-Headers', requestedHeaders || 'Content-Type,Authorization,X-Requested-With');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Expose-Headers', 'X-QuickMock-Source');
       res.setHeader('Access-Control-Max-Age', '86400');
       if (method === 'OPTIONS') {
         res.writeHead(204);
@@ -525,7 +543,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
         responseData = processTemplate(responseData, ctx);
       }
 
-      const headers = { 'Content-Type': 'application/json', ...resolvedHeaders };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-QuickMock-Source': 'route', ...resolvedHeaders };
       res.writeHead(resolvedStatus, headers);
       if (responseData !== undefined && responseData !== null) {
         res.end(typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2));
@@ -571,7 +589,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
       const reqBody = await parseBody(req);
       const query   = parseQuery(req.url!);
       const result  = handleResourceCrud(method, resourceMatch, reqBody, query);
-      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(result.headers ?? {}) };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-QuickMock-Source': 'resource', ...(result.headers ?? {}) };
       res.writeHead(result.status, headers);
       if (result.data !== null && result.data !== undefined) {
         res.end(JSON.stringify(result.data, null, 2));
@@ -589,7 +607,7 @@ export function createMockServer(config: MockServerConfig): MockServer {
     }
 
     // 404
-    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.writeHead(404, { 'Content-Type': 'application/json', 'X-QuickMock-Source': 'none' });
     res.end(JSON.stringify({ error: 'Not Found', message: `No mock for ${method} ${pathname}` }));
     logRequest(method, pathname, 404, Date.now() - start);
   }
@@ -647,6 +665,8 @@ export function createMockServer(config: MockServerConfig): MockServer {
     getConfig:     () => currentConfig,
     routeOverrides,
     resourceOverrides,
+    get proxyAuthHeaders() { return proxyAuthHeaders; },
+    set proxyAuthHeaders(h: Record<string, string>) { proxyAuthHeaders = h; },
     subscribeLog,
     get onProxyResponse() { return onProxyResponse; },
     set onProxyResponse(fn: ((entry: RecordedResponse) => void) | null) { onProxyResponse = fn; },

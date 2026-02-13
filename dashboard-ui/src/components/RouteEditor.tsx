@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Plus, Trash2, Save, ArrowUpRight, GitBranch, List, Zap } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { routes, overrides } from '../lib/api';
 import { cn, METHOD_BG } from '../lib/utils';
 import FlowEditor from './FlowEditor';
-import type { RouteConfig, SequenceStep, RouteRule } from '../lib/types';
+import type { RouteConfig, SequenceStep, RouteRule, RuntimeOverride } from '../lib/types';
 
 type ResponseMode = 'single' | 'sequence' | 'rules';
 
@@ -27,9 +27,10 @@ interface Props {
   routeList: RouteConfig[];
   proxyTarget?: string;
   running?: boolean;
+  routeOverrides?: Record<number, RuntimeOverride>;
 }
 
-export default function RouteEditor({ serverId, routeList, proxyTarget, running }: Props) {
+export default function RouteEditor({ serverId, routeList, proxyTarget, running, routeOverrides }: Props) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [form, setForm] = useState<Partial<RouteConfig>>({});
@@ -47,15 +48,28 @@ export default function RouteEditor({ serverId, routeList, proxyTarget, running 
     onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', serverId] }),
   });
 
-  const [passthroughs, setPassthroughs] = useState<Record<number, boolean>>({});
+  // Initialize passthrough state from server's runtime overrides
+  const serverPassthroughs = useMemo(() => {
+    const map: Record<number, boolean> = {};
+    if (routeOverrides) {
+      for (const [idx, ov] of Object.entries(routeOverrides)) {
+        if (ov.passthrough) map[Number(idx)] = true;
+      }
+    }
+    return map;
+  }, [routeOverrides]);
+
+  const [localOverrides, setLocalOverrides] = useState<Record<number, boolean>>({});
+  // Merge: server state as base, local toggles on top
+  const passthroughs = useMemo(() => ({ ...serverPassthroughs, ...localOverrides }), [serverPassthroughs, localOverrides]);
 
   const togglePassthrough = async (idx: number) => {
     const next = !passthroughs[idx];
-    setPassthroughs(prev => ({ ...prev, [idx]: next }));
+    setLocalOverrides(prev => ({ ...prev, [idx]: next }));
     try {
       await overrides.patchRoute(serverId, idx, { passthrough: next });
     } catch {
-      setPassthroughs(prev => ({ ...prev, [idx]: !next }));
+      setLocalOverrides(prev => ({ ...prev, [idx]: !next }));
     }
   };
 

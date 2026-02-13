@@ -48,6 +48,14 @@ export async function listRecordings(serverId: string): Promise<RecordedResponse
   }
 }
 
+export async function importRecordings(serverId: string, entries: RecordedResponse[]): Promise<number> {
+  const existing = await listRecordings(serverId);
+  const merged = [...existing, ...entries].slice(-MAX_RECORDINGS);
+  await fs.mkdir(path.join(DATA_DIR, 'servers'), { recursive: true });
+  await fs.writeFile(recordingsPath(serverId), JSON.stringify(merged, null, 2) + '\n');
+  return entries.length;
+}
+
 export async function clearRecordings(serverId: string): Promise<void> {
   try {
     await fs.unlink(recordingsPath(serverId));
